@@ -1,18 +1,17 @@
 # scraper.py
 """
-Módulo de recolha de dados da AllSportsAPI (API oficial de futebol).
+Módulo de recolha de dados da SportMonks API v3.
 """
 
 import requests
-import json
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 
 # ============================================================
 # CONFIGURAÇÃO
 # ============================================================
-API_KEY = "97136b858bff84845d6e6f2bad6a75679eb11e657682e951af497bd3434640a6"  # ← SUBSTITUIR PELA CHAVE REAL
-BASE_URL = "https://apiv2.allsportsapi.com/football/"
+API_KEY = "MEhqXtjX5ei5lwuvFqxMdoWbuRF57zEbEzyd8pFZjZOsmWRohJHTUUq1RgMP"  # ← COLOCA AQUI A TUA CHAVE REAL
+BASE_URL = "https://api.sportmonks.com/v3/football"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
@@ -23,22 +22,19 @@ HEADERS = {
 # FUNÇÕES AUXILIARES
 # ============================================================
 
-def _get(params: Dict) -> Optional[Dict]:
-    """Faz GET request à AllSportsAPI."""
-    params["APIkey"] = API_KEY
+def _get(endpoint: str, params: Dict) -> Optional[Dict]:
+    """Faz GET request à SportMonks API."""
+    params["api_token"] = API_KEY
     try:
-        resp = requests.get(BASE_URL, params=params, headers=HEADERS, timeout=15)
+        resp = requests.get(f"{BASE_URL}{endpoint}", params=params, headers=HEADERS, timeout=15)
         resp.raise_for_status()
         data = resp.json()
-        if data.get("success") != 1:
-            print(f"Erro da API: {data.get('message', 'sucesso=0')}")
-            return None
         return data
     except requests.RequestException as e:
         print(f"Erro na requisição: {e}")
         return None
 
-def _safe_get(data: Dict, *keys, default=None):
+def _safe_get(data, *keys, default=None):
     """Acede a chaves aninhadas com segurança."""
     for key in keys:
         if isinstance(data, dict) and key in data:
@@ -51,7 +47,7 @@ def _safe_get(data: Dict, *keys, default=None):
 # CLASSE PRINCIPAL
 # ============================================================
 
-class AllSportsAPI:
+class SportMonksAPI:
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update(HEADERS)
@@ -59,30 +55,39 @@ class AllSportsAPI:
 
     # ---------- JOGOS DO DIA ----------
     def get_scheduled_events(self, date_str: str) -> List[Dict]:
-        """Obtém jogos de uma data (formato 'YYYY-MM-DD')."""
+        """
+        Obtém jogos de uma data (formato 'YYYY-MM-DD').
+        A data deve ser passada como filtro.
+        """
         params = {
-            "met": "Fixtures",
-            "from": date_str,
-            "to": date_str,
+            "filters": f"fixtureDate:{date_str}",
+            "include": "league;homeTeam;awayTeam",
+            "per_page": 100,
         }
-        data = _get(params)
-        if not data:
+        data = _get("/fixtures", params)
+        if not data or "data" not in data:
             self.last_events = []
             return []
 
         events = []
-        for fixture in _safe_get(data, "result", default=[]):
+        for fx in _safe_get(data, "data", default=[]):
+            home_team = _safe_get(fx, "homeTeam", "name", default="?")
+            away_team = _safe_get(fx, "awayTeam", "name", default="?")
+            league_name = _safe_get(fx, "league", "name", default="")
+            event_id = fx.get("id")
+            start_time = fx.get("starting_at", "")
+
             event = {
-                "event_id": fixture.get("event_key"),
-                "home_team": fixture.get("event_home_team", "?"),
-                "away_team": fixture.get("event_away_team", "?"),
-                "tournament": fixture.get("league_name", ""),
-                "start_time": fixture.get("event_date", ""),
-                "status": fixture.get("event_status", ""),
-                "home_team_id": fixture.get("home_team_key"),
-                "away_team_id": fixture.get("away_team_key"),
-                "league_id": fixture.get("league_key"),
-                "raw": fixture
+                "event_id": event_id,
+                "home_team": home_team,
+                "away_team": away_team,
+                "tournament": league_name,
+                "start_time": start_time,
+                "status": fx.get("state", ""),
+                "home_team_id": _safe_get(fx, "homeTeam", "id"),
+                "away_team_id": _safe_get(fx, "awayTeam", "id"),
+                "league_id": _safe_get(fx, "league", "id"),
+                "raw": fx
             }
             events.append(event)
 
@@ -96,11 +101,11 @@ class AllSportsAPI:
                 return ev["raw"]
         return None
 
-    # ---------- ESTATÍSTICAS (não suportado) ----------
+    # ---------- ESTATÍSTICAS (não implementado) ----------
     def get_event_statistics(self, event_id: str) -> Optional[Dict]:
         return None
 
-    # ---------- ESCALAÇÕES (não suportado) ----------
+    # ---------- ESCALAÇÕES (não implementado) ----------
     def get_event_lineups(self, event_id: str) -> Optional[Dict]:
         return None
 
@@ -109,50 +114,52 @@ class AllSportsAPI:
         return None
 
     # ---------- CLASSIFICAÇÃO ----------
-    def get_tournament_standings(self, league_id: str) -> Optional[Dict]:
-        params = {
-            "met": "Standings",
-            "leagueId": league_id,
-        }
-        return _get(params)
+    def get_tournament_standings(self, season_id: str) -> Optional[Dict]:
+        params = {"per_page": 100}
+        data = _get(f"/standings/{season_id}", params)
+        return data
 
     # ---------- FORMA RECENTE ----------
     def get_team_recent_matches(self, team_id: str, num_matches: int = 5) -> List[Dict]:
         end_date = datetime.now()
         start_date = end_date - timedelta(days=180)
         params = {
-            "met": "Fixtures",
-            "from": start_date.strftime("%Y-%m-%d"),
-            "to": end_date.strftime("%Y-%m-%d"),
-            "teamId": team_id,
+            "filters": f"teamId:{team_id};fixtureDateStart:{start_date.strftime('%Y-%m-%d')};fixtureDateEnd:{end_date.strftime('%Y-%m-%d')}",
+            "include": "homeTeam;awayTeam",
+            "per_page": 50,
         }
-        data = _get(params)
-        if not data:
+        data = _get("/fixtures", params)
+        if not data or "data" not in data:
             return []
 
-        fixtures = _safe_get(data, "result", default=[])
+        fixtures = _safe_get(data, "data", default=[])
         played = []
         for fx in fixtures:
-            final_result = fx.get("event_final_result", "")
-            if final_result:
-                try:
-                    home_goals, away_goals = map(int, final_result.split("-"))
-                except:
-                    continue
-                if str(fx.get("home_team_key")) == str(team_id):
-                    golos_marcados = home_goals
-                    golos_sofridos = away_goals
-                    adversario = fx.get("event_away_team", "?")
-                else:
-                    golos_marcados = away_goals
-                    golos_sofridos = home_goals
-                    adversario = fx.get("event_home_team", "?")
-                played.append({
-                    "golos_marcados": golos_marcados,
-                    "golos_sofridos": golos_sofridos,
-                    "adversario": adversario,
-                    "data": fx.get("event_date", "")
-                })
+            scores = fx.get("scores", [])
+            if not scores:
+                continue
+            # Último score (final)
+            final_score = scores[-1] if scores else {}
+            home_goals = _safe_get(final_score, "score", "home", default=0) or 0
+            away_goals = _safe_get(final_score, "score", "away", default=0) or 0
+
+            if str(fx.get("home_team_id")) == str(team_id):
+                golos_marcados = int(home_goals)
+                golos_sofridos = int(away_goals)
+                adversario = _safe_get(fx, "awayTeam", "name", default="?")
+            else:
+                golos_marcados = int(away_goals)
+                golos_sofridos = int(home_goals)
+                adversario = _safe_get(fx, "homeTeam", "name", default="?")
+
+            played.append({
+                "golos_marcados": golos_marcados,
+                "golos_sofridos": golos_sofridos,
+                "adversario": adversario,
+                "data": fx.get("starting_at", "")
+            })
+
+        # Ordenar por data decrescente
         played.sort(key=lambda x: x["data"], reverse=True)
         return played[:num_matches]
 
@@ -210,19 +217,11 @@ class AllSportsAPI:
             except Exception as e:
                 print(f"Erro forma fora: {e}")
 
-        if league_id:
-            try:
-                standings = self.get_tournament_standings(league_id)
-                if standings:
-                    for row in _safe_get(standings, "result", default=[]):
-                        team_key = str(row.get("team_key"))
-                        position = row.get("standing_place")
-                        if team_key == str(home_id):
-                            match_data["posicao_casa"] = position
-                        elif team_key == str(away_id):
-                            match_data["posicao_fora"] = position
-            except Exception as e:
-                print(f"Erro classificação: {e}")
+        # Classificação (precisa do season_id, não league_id)
+        # Pode ser adicionado depois se necessário
+        # if league_id:
+        #     standings = self.get_tournament_standings(league_id)
+        #     ...
 
         return match_data
 
@@ -230,7 +229,7 @@ class AllSportsAPI:
 # TESTE RÁPIDO
 # ============================================================
 if __name__ == "__main__":
-    api = AllSportsAPI()
+    api = SportMonksAPI()
     date_str = "2026-08-15"
     print(f"Buscando jogos de {date_str}...")
     events = api.get_scheduled_events(date_str)
