@@ -1,5 +1,6 @@
 # ai_engine.py
 import json
+import math
 from typing import Dict, List, Optional, Any
 import numpy as np
 
@@ -29,7 +30,7 @@ def calcular_expectativa_golos(media_marcados_casa, media_sofridos_fora,
     return xg_casa, xg_fora
 
 def prob_poisson(golos_esperados, max_golos=6):
-    return [np.exp(-golos_esperados) * (golos_esperados ** k) / np.math.factorial(k)
+    return [np.exp(-golos_esperados) * (golos_esperados ** k) / math.factorial(k)
             for k in range(max_golos + 1)]
 
 def avaliar_resultado_final(xg_casa, xg_fora):
@@ -64,7 +65,7 @@ def avaliar_cantos(media_cantos_casa, media_cantos_fora, linha=8.5):
     if total_esperado <= 0:
         return 0.0
     z = (linha - total_esperado) / desvio_padrao
-    return round(1 - 0.5 * (1 + np.math.erf(z / np.sqrt(2))), 3)
+    return round(1 - 0.5 * (1 + math.erf(z / np.sqrt(2))), 3)
 
 def avaliar_cartoes(media_cartoes_casa, media_cartoes_fora, linha=3.5):
     total_esperado = media_cartoes_casa + media_cartoes_fora
@@ -72,7 +73,7 @@ def avaliar_cartoes(media_cartoes_casa, media_cartoes_fora, linha=3.5):
     if total_esperado <= 0:
         return 0.0
     z = (linha - total_esperado) / desvio_padrao
-    return round(1 - 0.5 * (1 + np.math.erf(z / np.sqrt(2))), 3)
+    return round(1 - 0.5 * (1 + math.erf(z / np.sqrt(2))), 3)
 
 def analisar_jogo(dados_jogo: Dict) -> Dict:
     event_id = dados_jogo.get('event_id')
