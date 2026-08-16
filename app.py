@@ -1,15 +1,25 @@
-import streamlit as st
-import pandas as pd
 import json
+import re
+import unicodedata
+
+import pandas as pd
+import streamlit as st
+
 from datetime import datetime, timedelta
-from streamlit_autorefresh import st_autorefresh
+
+from streamlit_autorefresh import (
+    st_autorefresh
+)
 
 from scraper import APIFootballAPI
+
 from ai_engine import analisar_jogo
+
 from ticket import (
     gerar_bilhete,
     gerar_montagens_inteligentes
 )
+
 import database
 
 
@@ -18,28 +28,58 @@ import database
 # ============================================================
 
 st.set_page_config(
-    page_title="⚽ FootballAI Bot PRO",
+
+    page_title="⚽ FootballAI Bot",
+
     page_icon="⚽",
+
     layout="wide",
+
     initial_sidebar_state="expanded"
 )
 
+
+# ============================================================
+# AUTO REFRESH
+# ============================================================
+
 st_autorefresh(
     interval=300000,
-    key="auto_refresh"
+    key="football_auto_refresh"
 )
 
 
 # ============================================================
-# CABEÇALHO
+# ESTILO
 # ============================================================
 
-st.title("⚽ FootballAI Bot PRO")
+st.markdown("""
+<style>
+
+.main-title {
+    font-size: 42px;
+    font-weight: 800;
+}
+
+.card {
+    padding: 18px;
+    border-radius: 15px;
+    border: 1px solid rgba(128,128,128,.25);
+    margin-bottom: 10px;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+
+st.markdown(
+    '<div class="main-title">⚽ FootballAI Bot</div>',
+    unsafe_allow_html=True
+)
 
 st.caption(
-    "Análise estatística de futebol • "
-    "Gols • Escanteios • Cartões • "
-    "Bilhetes inteligentes"
+    "🤖 Análise automática de futebol | "
+    "⚽ Golos | 🚩 Escanteios | 🟨 Cartões"
 )
 
 
@@ -51,38 +91,118 @@ with st.sidebar:
 
     st.header("⚙️ Configurações")
 
-    hoje = datetime.now().date()
-
     data_selecionada = st.date_input(
-        "Data dos jogos",
-        value=hoje,
-        min_value=hoje - timedelta(days=7),
-        max_value=hoje + timedelta(days=7)
+
+        "📅 Data dos jogos",
+
+        value=datetime.now().date(),
+
+        min_value=(
+            datetime.now().date()
+            -
+            timedelta(days=7)
+        ),
+
+        max_value=(
+            datetime.now().date()
+            +
+            timedelta(days=7)
+        )
     )
 
     st.divider()
 
     st.info(
-        "🎟️ Bilhete do Dia: "
-        "**mínimo de 10 jogos**"
-    )
-
-    st.info(
         "🔄 Atualização automática: 5 minutos"
     )
 
-    st.caption(
-        "Os resultados são estimativas "
-        "estatísticas e não garantem resultados."
+    st.info(
+        "🎟️ Bilhete do dia: mínimo 10 jogos"
+    )
+
+    st.info(
+        "🚫 Máximo de 1 seleção por jogo"
     )
 
 
 # ============================================================
-# ANÁLISE DOS JOGOS
+# NORMALIZAR TEXTO
+# ============================================================
+
+def normalizar(texto):
+
+    if not texto:
+        return ""
+
+    texto = str(
+        texto
+    ).lower()
+
+    texto = unicodedata.normalize(
+        "NFD",
+        texto
+    )
+
+    texto = "".join(
+        c
+        for c in texto
+        if unicodedata.category(c)
+        != "Mn"
+    )
+
+    texto = re.sub(
+        r"[^a-z0-9\s]",
+        " ",
+        texto
+    )
+
+    texto = re.sub(
+        r"\s+",
+        " ",
+        texto
+    ).strip()
+
+    return texto
+
+
+def equipa_corresponde(
+    pesquisa,
+    nome
+):
+
+    pesquisa = normalizar(
+        pesquisa
+    )
+
+    nome = normalizar(
+        nome
+    )
+
+    if not pesquisa or not nome:
+        return False
+
+    # Correspondência direta
+    if pesquisa in nome:
+        return True
+
+    # Comparação por palavras
+    palavras = pesquisa.split()
+
+    if all(
+        palavra in nome
+        for palavra in palavras
+    ):
+        return True
+
+    return False
+
+
+# ============================================================
+# CACHE DOS JOGOS
 # ============================================================
 
 @st.cache_data(ttl=300)
-def analisar_jogos_do_dia(
+def buscar_e_analisar(
     date_str
 ):
 
@@ -92,10 +212,10 @@ def analisar_jogos_do_dia(
         date_str
     )
 
+    resultados = []
+
     if not jogos:
         return []
-
-    resultados = []
 
     for jogo in jogos:
 
@@ -133,6 +253,10 @@ def analisar_jogos_do_dia(
                 )
             )
 
+            analise["event_id"] = (
+                jogo["event_id"]
+            )
+
             resultados.append(
                 analise
             )
@@ -140,32 +264,37 @@ def analisar_jogos_do_dia(
         except Exception as e:
 
             print(
-                "Erro ao analisar:",
-                jogo.get("home_team"),
-                jogo.get("away_team"),
+                "Erro análise:",
                 e
             )
 
     resultados.sort(
-        key=lambda x: x.get(
-            "confianca_geral",
-            0
-        ),
+        key=lambda x:
+            x.get(
+                "confianca_geral",
+                0
+            ),
         reverse=True
     )
 
     return resultados
 
 
-date_str = data_selecionada.strftime(
-    "%Y-%m-%d"
+# ============================================================
+# OBTER RESULTADOS
+# ============================================================
+
+date_str = (
+    data_selecionada.strftime(
+        "%Y-%m-%d"
+    )
 )
 
 with st.spinner(
-    "🔎 A recolher e analisar jogos..."
+    "⚽ A recolher e analisar os jogos..."
 ):
 
-    resultados = analisar_jogos_do_dia(
+    resultados = buscar_e_analisar(
         date_str
     )
 
@@ -175,10 +304,15 @@ with st.spinner(
 # ============================================================
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
+
     "📊 Análise",
+
     "🔎 Pesquisa",
+
     "🎟️ Bilhete do Dia",
-    "💎 Montagens Inteligentes",
+
+    "💎 Montagens",
+
     "📜 Histórico"
 ])
 
@@ -190,7 +324,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 with tab1:
 
     st.subheader(
-        f"📊 Jogos de {date_str}"
+        f"📅 Jogos de {date_str}"
     )
 
     st.metric(
@@ -201,29 +335,71 @@ with tab1:
     if not resultados:
 
         st.warning(
-            "Nenhum jogo encontrado ou "
-            "não foi possível obter os dados."
+            "Nenhum jogo encontrado para esta data."
         )
 
     else:
 
-        # ------------------------------------
+        # -----------------------------------------------
+        # SALVAR PREVISÕES
+        # -----------------------------------------------
+
+        for r in resultados:
+
+            for p in r.get(
+                "previsoes",
+                []
+            ):
+
+                database.salvar_previsao(
+
+                    data_jogo=date_str,
+
+                    jogo=(
+                        f"{r['home_team']} "
+                        f"vs "
+                        f"{r['away_team']}"
+                    ),
+
+                    mercado=p["mercado"],
+
+                    selecao=p["selecao"],
+
+                    probabilidade=p[
+                        "probabilidade"
+                    ],
+
+                    odd=p.get("odd"),
+
+                    pontuacao=p[
+                        "pontuacao"
+                    ],
+
+                    confianca_jogo=r[
+                        "confianca_geral"
+                    ]
+                )
+
+        # -----------------------------------------------
         # TABELA
-        # ------------------------------------
+        # -----------------------------------------------
 
         rows = []
 
         for r in resultados:
 
-            top = r["previsoes"][:3]
+            melhores = r.get(
+                "previsoes",
+                []
+            )[:3]
 
-            texto = " | ".join([
-                (
-                    f"{p['mercado']}: "
-                    f"{p['selecao']} "
-                    f"({p['probabilidade']:.0%})"
-                )
-                for p in top
+            top = " | ".join([
+
+                f"{p['mercado']}: "
+                f"{p['selecao']} "
+                f"({p['probabilidade']:.0%})"
+
+                for p in melhores
             ])
 
             rows.append({
@@ -243,45 +419,42 @@ with tab1:
                     r.get(
                         "start_time",
                         ""
-                    ),
+                    )[-14:-9],
 
-                "xG Casa":
-                    r["xg_casa"],
-
-                "xG Fora":
-                    r["xg_fora"],
+                "xG":
+                    f"{r['xg_casa']:.2f} - "
+                    f"{r['xg_fora']:.2f}",
 
                 "Confiança":
-                    f"{r['confianca_geral']:.1f}%",
+                    f"{r['confianca_geral']}%",
 
                 "Melhores mercados":
-                    texto
+                    top
             })
 
-        df = pd.DataFrame(rows)
-
         st.dataframe(
-            df,
+            pd.DataFrame(rows),
             use_container_width=True,
             hide_index=True
         )
 
         st.divider()
 
-        # ------------------------------------
+        # -----------------------------------------------
         # DETALHES
-        # ------------------------------------
+        # -----------------------------------------------
 
         for r in resultados:
 
-            titulo = (
+            with st.expander(
+
                 f"⚽ {r['home_team']} "
                 f"vs "
                 f"{r['away_team']} "
-                f"• {r['confianca_geral']:.1f}%"
-            )
-
-            with st.expander(titulo):
+                f" | "
+                f"Confiança: "
+                f"{r['confianca_geral']}%"
+            ):
 
                 c1, c2, c3, c4 = st.columns(4)
 
@@ -296,64 +469,43 @@ with tab1:
                 )
 
                 c3.metric(
-                    "Forma Casa",
-                    f"{r['forma_casa']:.0f}%"
+                    "Escanteios Casa",
+                    r.get(
+                        "media_cantos_casa",
+                        4.5
+                    )
                 )
 
                 c4.metric(
-                    "Forma Fora",
-                    f"{r['forma_fora']:.0f}%"
+                    "Escanteios Fora",
+                    r.get(
+                        "media_cantos_fora",
+                        4.0
+                    )
                 )
 
                 st.markdown(
-                    "### 🎯 Previsões"
+                    "### 🤖 Palpites"
                 )
 
-                for p in r["previsoes"]:
-
-                    prob = min(
-                        float(
-                            p["probabilidade"]
-                        ),
-                        1.0
-                    )
+                for p in r.get(
+                    "previsoes",
+                    []
+                ):
 
                     st.markdown(
-                        f"**{p['mercado']}** — "
-                        f"{p['selecao']} "
-                        f"• "
-                        f"**{p['probabilidade']:.0%}** "
-                        f"• Pontuação "
+
+                        f"**{p['mercado']}** → "
+                        f"**{p['selecao']}** "
+                        f"| "
+                        f"{p['probabilidade']:.0%} "
+                        f"| Pontuação: "
                         f"{p['pontuacao']:.1f}"
-                    )
-
-                    st.progress(
-                        prob
-                    )
-
-                # Guardar previsões
-                for p in r["previsoes"]:
-
-                    database.salvar_previsao(
-                        data_jogo=date_str,
-                        jogo=(
-                            f"{r['home_team']} "
-                            f"vs "
-                            f"{r['away_team']}"
-                        ),
-                        mercado=p["mercado"],
-                        selecao=p["selecao"],
-                        probabilidade=p["probabilidade"],
-                        odd=p.get("odd"),
-                        pontuacao=p["pontuacao"],
-                        confianca_jogo=r[
-                            "confianca_geral"
-                        ]
                     )
 
 
 # ============================================================
-# ABA 2 — PESQUISA
+# ABA 2 - PESQUISA
 # ============================================================
 
 with tab2:
@@ -362,19 +514,23 @@ with tab2:
         "🔎 Pesquisar Jogo"
     )
 
+    st.caption(
+        "Procura automaticamente nos próximos 7 dias."
+    )
+
     c1, c2 = st.columns(2)
 
     with c1:
 
         equipa_casa = st.text_input(
-            "Equipa da Casa",
+            "🏠 Equipa da Casa",
             placeholder="Ex: Arsenal"
         )
 
     with c2:
 
         equipa_fora = st.text_input(
-            "Equipa de Fora",
+            "✈️ Equipa de Fora",
             placeholder="Ex: Chelsea"
         )
 
@@ -385,97 +541,131 @@ with tab2:
 
     if pesquisar:
 
-        if not equipa_casa or not equipa_fora:
+        if (
+            not equipa_casa
+            or
+            not equipa_fora
+        ):
 
             st.warning(
-                "Indica as duas equipas."
+                "Digite as duas equipas."
             )
 
         else:
 
+            api = APIFootballAPI()
+
+            encontrados = []
+
             with st.spinner(
-                "A procurar..."
+                "🔎 Procurando nos próximos 7 dias..."
             ):
-
-                api = APIFootballAPI()
-
-                encontrado = None
-                data_encontrada = None
 
                 for i in range(7):
 
-                    data = (
+                    data_pesquisa = (
+
                         datetime.now().date()
-                        + timedelta(days=i)
+                        +
+                        timedelta(days=i)
                     ).strftime(
                         "%Y-%m-%d"
                     )
 
                     eventos = (
                         api.get_scheduled_events(
-                            data
+                            data_pesquisa
                         )
                     )
 
                     for ev in eventos:
 
-                        h = ev[
-                            "home_team"
-                        ].lower()
+                        casa_ok = equipa_corresponde(
+                            equipa_casa,
+                            ev["home_team"]
+                        )
 
-                        a = ev[
-                            "away_team"
-                        ].lower()
+                        fora_ok = equipa_corresponde(
+                            equipa_fora,
+                            ev["away_team"]
+                        )
 
-                        if (
-                            equipa_casa.lower()
-                            in h
-                            and
-                            equipa_fora.lower()
-                            in a
-                        ):
+                        if casa_ok and fora_ok:
 
-                            encontrado = ev
-                            data_encontrada = data
-                            break
+                            encontrados.append(
+                                (
+                                    data_pesquisa,
+                                    ev
+                                )
+                            )
 
-                    if encontrado:
-                        break
+            # ------------------------------------------------
+            # RESULTADOS
+            # ------------------------------------------------
 
-                if not encontrado:
+            if not encontrados:
 
-                    st.warning(
-                        "❌ Jogo não encontrado."
-                    )
+                st.error(
+                    "❌ Jogo não encontrado "
+                    "nos próximos 7 dias."
+                )
 
-                else:
+                st.info(
+                    "💡 Tenta escrever apenas "
+                    "parte do nome da equipa."
+                )
+
+            else:
+
+                st.success(
+                    f"✅ {len(encontrados)} "
+                    f"jogo(s) encontrado(s)."
+                )
+
+                # ------------------------------------------------
+                # ESCOLHER JOGO
+                # ------------------------------------------------
+
+                opcoes = [
+
+                    f"{data} | "
+                    f"{ev['home_team']} "
+                    f"vs "
+                    f"{ev['away_team']}"
+
+                    for data, ev
+                    in encontrados
+                ]
+
+                escolha = st.selectbox(
+                    "Seleciona o jogo:",
+                    range(len(opcoes)),
+                    format_func=lambda i:
+                        opcoes[i]
+                )
+
+                data_jogo, evento = (
+                    encontrados[escolha]
+                )
+
+                # ------------------------------------------------
+                # ANALISAR
+                # ------------------------------------------------
+
+                with st.spinner(
+                    "🤖 A analisar o jogo..."
+                ):
 
                     dados = (
                         api.prepare_match_data(
-                            encontrado[
-                                "event_id"
-                            ]
+                            evento["event_id"]
                         )
                     )
 
-                    if not dados:
-
-                        st.error(
-                            "Não foi possível "
-                            "obter os dados."
-                        )
-
-                    else:
+                    if dados:
 
                         analise = analisar_jogo(
                             dados
-                        )
-
-                        st.success(
-                            f"✅ Encontrado: "
-                            f"{encontrado['home_team']} "
-                            f"vs "
-                            f"{encontrado['away_team']}"
                         )
 
                         c1, c2, c3 = st.columns(3)
@@ -492,11 +682,13 @@ with tab2:
 
                         c3.metric(
                             "Confiança",
-                            f"{analise['confianca_geral']:.1f}%"
+                            f"{analise['confianca_geral']}%"
                         )
 
+                        st.divider()
+
                         st.markdown(
-                            "### 🎯 Mercados"
+                            "### 📊 Palpites"
                         )
 
                         for p in analise[
@@ -504,21 +696,33 @@ with tab2:
                         ]:
 
                             st.markdown(
-                                f"**{p['mercado']}**: "
-                                f"{p['selecao']} — "
-                                f"**{p['probabilidade']:.0%}**"
+
+                                f"**{p['mercado']}**  \n"
+                                f"➡️ **{p['selecao']}**  \n"
+                                f"📊 Probabilidade: "
+                                f"**{p['probabilidade']:.0%}**  \n"
+                                f"⭐ Pontuação: "
+                                f"**{p['pontuacao']:.1f}**"
                             )
 
                             st.progress(
-                                min(
-                                    p["probabilidade"],
-                                    1
+                                float(
+                                    p["probabilidade"]
                                 )
                             )
 
+                            st.divider()
+
+                    else:
+
+                        st.error(
+                            "Não foi possível "
+                            "obter os dados."
+                        )
+
 
 # ============================================================
-# ABA 3 — BILHETE DO DIA
+# ABA 3 - BILHETE
 # ============================================================
 
 with tab3:
@@ -528,102 +732,111 @@ with tab3:
     )
 
     st.info(
-        "O Bilhete do Dia exige "
-        "**10 ou mais jogos diferentes**."
+        "O bilhete exige pelo menos "
+        "**10 jogos diferentes**."
     )
 
-    bilhete = gerar_bilhete(
-        resultados,
-        min_jogos=10,
-        max_jogos=15,
-        min_pontuacao=65
-    ) if resultados else None
-
-    if not bilhete:
+    if len(resultados) < 10:
 
         st.warning(
-            "⚠️ Não existem pelo menos "
-            "10 jogos com qualidade suficiente "
-            "para formar o Bilhete do Dia."
-        )
 
-        st.write(
-            f"Jogos analisados: "
-            f"**{len(resultados)}**"
+            f"⚠️ Existem apenas "
+            f"**{len(resultados)} jogos analisados**. "
+
+            f"O Bilhete do Dia só será criado "
+            f"quando existirem pelo menos "
+            f"**10 jogos**."
         )
 
     else:
 
-        database.salvar_bilhete(
-            data_bilhete=date_str,
-            selecoes=bilhete[
-                "selecoes"
-            ],
-            odd_total=bilhete[
-                "odd_total"
-            ],
-            confianca_media=bilhete[
-                "confianca_media"
-            ],
-            tipo="Bilhete do Dia"
+        bilhete = gerar_bilhete(
+            resultados,
+            minimo_jogos=10,
+            max_selecoes=20
         )
 
-        c1, c2, c3 = st.columns(3)
+        if bilhete:
 
-        c1.metric(
-            "Jogos",
-            bilhete[
-                "num_selecoes"
-            ]
-        )
-
-        c2.metric(
-            "Confiança média",
-            f"{bilhete['confianca_media']:.1f}%"
-        )
-
-        c3.metric(
-            "Odd Total",
-            (
-                f"{bilhete['odd_total']:.2f}"
-                if bilhete["odd_total"]
-                else "N/D"
-            )
-        )
-
-        st.divider()
-
-        for i, sel in enumerate(
-            bilhete["selecoes"],
-            1
-        ):
-
-            st.markdown(
-                f"### {i}. {sel['jogo']}"
+            st.success(
+                f"🎟️ Bilhete criado com "
+                f"**{bilhete['num_jogos']} jogos**."
             )
 
-            st.write(
-                f"**{sel['mercado']}** → "
-                f"**{sel['selecao']}**"
+            c1, c2, c3 = st.columns(3)
+
+            c1.metric(
+                "Jogos",
+                bilhete["num_jogos"]
             )
 
-            st.progress(
-                min(
-                    sel["probabilidade"],
-                    1
+            c2.metric(
+                "Confiança média",
+                f"{bilhete['confianca_media']:.1f}%"
+            )
+
+            c3.metric(
+                "Odd total",
+                (
+                    f"{bilhete['odd_total']:.2f}"
+                    if bilhete["odd_total"]
+                    else "Indisponível"
                 )
             )
 
-            st.caption(
-                f"Probabilidade: "
-                f"{sel['probabilidade']:.0%} "
-                f"• Pontuação: "
-                f"{sel['pontuacao']:.1f}"
+            st.divider()
+
+            for i, sel in enumerate(
+                bilhete["selecoes"],
+                start=1
+            ):
+
+                st.markdown(
+
+                    f"### {i}. ⚽ {sel['jogo']}"
+
+                )
+
+                st.markdown(
+
+                    f"**{sel['mercado']}** → "
+                    f"**{sel['selecao']}** "
+                    f"| "
+                    f"📊 {sel['probabilidade']:.0%} "
+                    f"| "
+                    f"⭐ {sel['pontuacao']:.1f}"
+                )
+
+            # Salvar
+            database.salvar_bilhete(
+
+                data_bilhete=date_str,
+
+                selecoes=bilhete[
+                    "selecoes"
+                ],
+
+                odd_total=bilhete[
+                    "odd_total"
+                ],
+
+                confianca_media=bilhete[
+                    "confianca_media"
+                ],
+
+                tipo="normal"
+            )
+
+        else:
+
+            st.warning(
+                "Não foi possível gerar "
+                "o bilhete."
             )
 
 
 # ============================================================
-# ABA 4 — MONTAGENS
+# ABA 4 - MONTAGENS
 # ============================================================
 
 with tab4:
@@ -632,80 +845,88 @@ with tab4:
         "💎 Montagens Inteligentes"
     )
 
-    st.caption(
-        "Combinações de mercados do mesmo jogo "
-        "quando existem sinais estatísticos "
-        "suficientemente fortes."
-    )
+    if len(resultados) < 10:
 
-    montagens = (
-        gerar_montagens_inteligentes(
-            resultados
-        )
-        if resultados
-        else []
-    )
-
-    if not montagens:
-
-        st.info(
-            "Nenhuma combinação suficientemente "
-            "forte foi encontrada."
+        st.warning(
+            "São necessários pelo menos "
+            "**10 jogos analisados**."
         )
 
     else:
 
-        for montagem in montagens:
+        montagens = (
+            gerar_montagens_inteligentes(
+                resultados
+            )
+        )
 
-            database.salvar_bilhete(
-                data_bilhete=date_str,
-                selecoes=montagem[
-                    "selecoes"
-                ],
-                odd_total=None,
-                confianca_media=montagem[
-                    "confianca_media"
-                ],
-                tipo=montagem["nome"]
+        if not montagens:
+
+            st.info(
+                "Não existem montagens "
+                "com os critérios atuais."
             )
 
-            with st.expander(
-                f"{montagem['nome']} "
-                f"• {montagem['num_selecoes']} "
-                f"combinações "
-                f"• {montagem['confianca_media']:.1f}%"
-            ):
+        else:
 
-                for sel in montagem[
-                    "selecoes"
-                ]:
+            for m in montagens:
 
-                    st.markdown(
-                        f"**{sel['jogo']}**"
-                    )
+                with st.expander(
 
-                    st.write(
-                        f"{sel['mercado']} → "
-                        f"{sel['selecao']}"
-                    )
+                    f"{m['nome']} | "
+                    f"{m['num_selecoes']} jogos | "
+                    f"Confiança "
+                    f"{m['confianca_media']:.1f}%"
+                ):
 
-                    st.progress(
-                        min(
-                            sel[
-                                "probabilidade"
-                            ],
-                            1
+                    for i, sel in enumerate(
+                        m["selecoes"],
+                        start=1
+                    ):
+
+                        st.markdown(
+
+                            f"**{i}.** "
+                            f"{sel['jogo']} → "
+                            f"**{sel['mercado']}**: "
+                            f"**{sel['selecao']}** "
+                            f"({sel['probabilidade']:.0%})"
                         )
-                    )
 
-                    st.caption(
-                        f"Confiança estimada: "
-                        f"{sel['probabilidade']:.0%}"
+                    if m.get(
+                        "odd_total"
+                    ):
+
+                        st.success(
+
+                            f"Odd total: "
+                            f"{m['odd_total']:.2f}"
+                        )
+
+                    database.salvar_bilhete(
+
+                        data_bilhete=date_str,
+
+                        selecoes=m[
+                            "selecoes"
+                        ],
+
+                        odd_total=m[
+                            "odd_total"
+                        ],
+
+                        confianca_media=m[
+                            "confianca_media"
+                        ],
+
+                        tipo=m[
+                            "nome"
+                        ]
                     )
 
 
 # ============================================================
-# ABA 5 — HISTÓRICO
+# ABA 5 - HISTÓRICO
 # ============================================================
 
 with tab5:
@@ -714,12 +935,16 @@ with tab5:
         "📜 Histórico"
     )
 
-    c1, c2 = st.columns(2)
+    col1, col2 = st.columns(2)
 
-    with c1:
+    # --------------------------------------------------------
+    # PREVISÕES
+    # --------------------------------------------------------
+
+    with col1:
 
         st.markdown(
-            "### 🎯 Previsões"
+            "### 📊 Previsões"
         )
 
         previsoes = (
@@ -746,7 +971,11 @@ with tab5:
                 "Sem previsões."
             )
 
-    with c2:
+    # --------------------------------------------------------
+    # BILHETES
+    # --------------------------------------------------------
+
+    with col2:
 
         st.markdown(
             "### 🎟️ Bilhetes"
@@ -754,64 +983,52 @@ with tab5:
 
         bilhetes = (
             database.listar_bilhetes(
-                30
+                50
             )
         )
 
-        if not bilhetes:
-
-            st.info(
-                "Sem bilhetes."
-            )
-
-        else:
+        if bilhetes:
 
             for b in bilhetes:
 
                 with st.expander(
-                    f"{b['tipo']} — "
-                    f"{b['data_bilhete']} "
-                    f"• "
-                    f"{b['confianca_media']:.1f}%"
+
+                    f"{b['tipo']} | "
+                    f"{b['data_bilhete']} | "
+                    f"{b['status']}"
                 ):
 
-                    st.write(
-                        f"Status: "
-                        f"**{b['status']}**"
+                    selecoes = (
+                        json.loads(
+                            b["selecoes"]
+                        )
+                        if isinstance(
+                            b["selecoes"],
+                            str
+                        )
+                        else b["selecoes"]
                     )
 
-                    try:
+                    st.write(
+                        f"Jogos: "
+                        f"{len(selecoes)}"
+                    )
 
-                        selecoes = (
-                            json.loads(
-                                b["selecoes"]
-                            )
-                            if isinstance(
-                                b["selecoes"],
-                                str
-                            )
-                            else b["selecoes"]
-                        )
-
-                    except:
-
-                        selecoes = []
+                    st.write(
+                        f"Confiança: "
+                        f"{b['confianca_media']}%"
+                    )
 
                     for sel in selecoes:
 
                         st.markdown(
-                            f"- **{sel.get('jogo', '')}** "
-                            f"→ "
-                            f"{sel.get('mercado', '')}: "
-                            f"{sel.get('selecao', '')}"
+
+                            f"- {sel['jogo']} → "
+                            f"{sel['mercado']}: "
+                            f"**{sel['selecao']}**"
                         )
 
-                    if b["odd_total"]:
-
-                        st.write(
-                            f"Odd total: "
-                            f"**{b['odd_total']:.2f}**"
-                        )
+                    st.divider()
 
                     opcoes = [
                         "pendente",
@@ -819,36 +1036,44 @@ with tab5:
                         "perdido"
                     ]
 
-                    atual = (
+                    status_atual = (
                         b["status"]
                         if b["status"]
                         in opcoes
                         else "pendente"
                     )
 
-                    novo = st.selectbox(
+                    novo_status = st.selectbox(
+
                         "Status",
+
                         opcoes,
+
                         index=opcoes.index(
-                            atual
+                            status_atual
                         ),
+
                         key=f"status_{b['id']}"
                     )
 
-                    if novo != atual:
+                    if st.button(
+                        "💾 Guardar",
+                        key=f"guardar_{b['id']}"
+                    ):
 
-                        if st.button(
-                            "💾 Salvar",
-                            key=f"save_{b['id']}"
-                        ):
+                        database.atualizar_status_bilhete(
+                            b["id"],
+                            novo_status
+                        )
 
-                            database.atualizar_status_bilhete(
-                                b["id"],
-                                novo
-                            )
+                        st.success(
+                            "Status atualizado."
+                        )
 
-                            st.success(
-                                "Status atualizado."
-                            )
+                        st.rerun()
 
-                            st.rerun()
+        else:
+
+            st.info(
+                "Sem bilhetes."
+            )
