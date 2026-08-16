@@ -3,7 +3,7 @@ import requests
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 
-API_KEY = os.getenv("API_FOOTBALL_KEY", "").strip()
+API_KEY = os.getenv("0ef75e8f44d4ab899653ab4d8753e386", "").strip()
 BASE_URL = "https://v3.football.api-sports.io"
 
 HEADERS = {
