@@ -1,17 +1,21 @@
 from typing import List, Dict, Optional
-from itertools import combinations
 
 
-MIN_JOGOS_BILHETE = 10
-MAX_JOGOS_BILHETE = 15
+# ============================================================
+# BILHETE DO DIA
+# ============================================================
 
-
-def preparar_candidatas(
+def gerar_bilhete(
     resultados: List[Dict],
-    min_pontuacao: float = 65
-):
+    minimo_jogos: int = 10,
+    max_selecoes: int = 20
+) -> Optional[Dict]:
 
-    candidatas = []
+    candidatos = []
+
+    # ========================================================
+    # ESCOLHER APENAS O MELHOR PALPITE DE CADA JOGO
+    # ========================================================
 
     for jogo in resultados:
 
@@ -24,54 +28,66 @@ def preparar_candidatas(
             continue
 
         # Melhor previsão do jogo
-        melhores = [
-            p for p in previsoes
-            if p.get(
+        melhor = max(
+            previsoes,
+            key=lambda p: p.get(
                 "pontuacao",
                 0
-            ) >= min_pontuacao
-        ]
-
-        if not melhores:
-            continue
-
-        melhores.sort(
-            key=lambda x: (
-                x.get(
-                    "pontuacao",
-                    0
-                ),
-                x.get(
-                    "probabilidade",
-                    0
-                )
-            ),
-            reverse=True
+            )
         )
 
-        p = melhores[0]
+        if melhor.get(
+            "pontuacao",
+            0
+        ) <= 0:
+            continue
 
-        candidatas.append({
-            "jogo": (
-                f"{jogo['home_team']} "
-                f"vs "
-                f"{jogo['away_team']}"
-            ),
-            "event_id": jogo.get(
-                "event_id"
-            ),
-            "mercado": p["mercado"],
-            "selecao": p["selecao"],
-            "probabilidade": p["probabilidade"],
-            "odd": p.get("odd"),
-            "pontuacao": p["pontuacao"],
-            "confianca_jogo": jogo.get(
-                "confianca_geral",
-                0
-            )
+        candidatos.append({
+
+            "jogo":
+                f"{jogo['home_team']} vs "
+                f"{jogo['away_team']}",
+
+            "event_id":
+                jogo.get(
+                    "event_id"
+                ),
+
+            "mercado":
+                melhor["mercado"],
+
+            "selecao":
+                melhor["selecao"],
+
+            "probabilidade":
+                melhor["probabilidade"],
+
+            "odd":
+                melhor.get("odd"),
+
+            "pontuacao":
+                melhor["pontuacao"],
+
+            "confianca_jogo":
+                jogo.get(
+                    "confianca_geral",
+                    0
+                )
         })
 
-    candidatas.sort(
+    # ========================================================
+    # PRECISA DE PELO MENOS 10 JOGOS
+    # ========================================================
+
+    if len(candidatos) < minimo_jogos:
+
+        return None
+
+    # ========================================================
+    # ORDENAR
+    # ========================================================
+
+    candidatos.sort(
         key=lambda x: (
             x["pontuacao"],
             x["probabilidade"]
@@ -79,189 +95,90 @@ def preparar_candidatas(
         reverse=True
     )
 
-    return candidatas
+    # ========================================================
+    # PEGAR PELO MENOS 10
+    # ========================================================
 
-
-def calcular_odd_total(
-    selecoes
-):
-
-    if not selecoes:
-        return None
-
-    total = 1.0
-
-    for s in selecoes:
-
-        odd = s.get("odd")
-
-        if not odd or odd <= 1:
-            return None
-
-        total *= float(odd)
-
-    return round(
-        total,
-        2
-    )
-
-
-def gerar_bilhete(
-    resultados: List[Dict],
-    min_jogos: int = MIN_JOGOS_BILHETE,
-    max_jogos: int = MAX_JOGOS_BILHETE,
-    min_pontuacao: float = 65
-) -> Optional[Dict]:
-
-    candidatas = preparar_candidatas(
-        resultados,
-        min_pontuacao
-    )
-
-    # Uma seleção por jogo
-    jogos_unicos = {}
-
-    for c in candidatas:
-
-        event_id = c.get(
-            "event_id"
+    selecionadas = candidatos[
+        :max(
+            minimo_jogos,
+            min(
+                max_selecoes,
+                len(candidatos)
+            )
         )
-
-        if event_id not in jogos_unicos:
-
-            jogos_unicos[event_id] = c
-
-    selecionadas = list(
-        jogos_unicos.values()
-    )
-
-    selecionadas.sort(
-        key=lambda x: x["pontuacao"],
-        reverse=True
-    )
-
-    # Máximo
-    selecionadas = selecionadas[
-        :max_jogos
     ]
 
-    # Regra fundamental:
-    # menos de 10 = não gerar
-    if len(selecionadas) < min_jogos:
+    # ========================================================
+    # ODDS
+    # ========================================================
 
-        return None
+    odd_total = 1.0
+    tem_odds = True
 
-    confianca_media = round(
+    for sel in selecionadas:
+
+        odd = sel.get("odd")
+
+        if odd is None:
+
+            tem_odds = False
+            break
+
+        try:
+
+            odd_total *= float(
+                odd
+            )
+
+        except:
+
+            tem_odds = False
+            break
+
+    # ========================================================
+    # CONFIANÇA
+    # ========================================================
+
+    confianca = (
         sum(
-            x["pontuacao"]
-            for x in selecionadas
-        ) / len(selecionadas),
-        1
+            s["pontuacao"]
+            for s in selecionadas
+        )
+        /
+        len(selecionadas)
     )
 
     return {
-        "selecoes": selecionadas,
-        "num_selecoes": len(
-            selecionadas
-        ),
-        "odd_total": calcular_odd_total(
-            selecionadas
-        ),
-        "confianca_media": confianca_media
-    }
 
+        "selecoes":
+            selecionadas,
 
-# ============================================================
-# COMBINAÇÕES DENTRO DO MESMO JOGO
-# ============================================================
+        "num_selecoes":
+            len(selecionadas),
 
-def gerar_combinacoes_jogo(
-    jogo: Dict,
-    min_prob: float = 0.72
-):
-
-    previsoes = [
-        p for p in jogo.get(
-            "previsoes",
-            []
-        )
-        if p.get(
-            "probabilidade",
-            0
-        ) >= min_prob
-    ]
-
-    previsoes.sort(
-        key=lambda x: x.get(
-            "probabilidade",
-            0
-        ),
-        reverse=True
-    )
-
-    combinacoes = []
-
-    # Só combina mercados diferentes
-    for a, b in combinations(
-        previsoes,
-        2
-    ):
-
-        # Evita combinar o mesmo mercado
-        if a["mercado"] == b["mercado"]:
-            continue
-
-        pa = a["probabilidade"]
-        pb = b["probabilidade"]
-
-        # Penalização de correlação/risco.
-        # Não tratamos os mercados como independentes.
-        prob_combinada = (
-            min(pa, pb) * 0.82
-            + ((pa + pb) / 2) * 0.18
-        )
-
-        if prob_combinada < 0.60:
-            continue
-
-        combinacoes.append({
-            "jogo": (
-                f"{jogo['home_team']} "
-                f"vs "
-                f"{jogo['away_team']}"
+        "num_jogos":
+            len(
+                set(
+                    s["jogo"]
+                    for s in selecionadas
+                )
             ),
-            "event_id": jogo.get(
-                "event_id"
-            ),
-            "mercado": (
-                f"{a['mercado']} + "
-                f"{b['mercado']}"
-            ),
-            "selecao": (
-                f"{a['selecao']} + "
-                f"{b['selecao']}"
-            ),
-            "probabilidade": round(
-                prob_combinada,
-                3
-            ),
-            "odd": None,
-            "pontuacao": round(
-                prob_combinada * 100,
-                1
-            ),
-            "confianca_jogo": jogo.get(
-                "confianca_geral",
-                0
+
+        "odd_total":
+            round(
+                odd_total,
+                2
             )
-        })
+            if tem_odds
+            else None,
 
-    combinacoes.sort(
-        key=lambda x: x["pontuacao"],
-        reverse=True
-    )
-
-    return combinacoes
+        "confianca_media":
+            round(
+                confianca,
+                1
+            )
+    }
 
 
 # ============================================================
@@ -270,78 +187,184 @@ def gerar_combinacoes_jogo(
 
 def gerar_montagens_inteligentes(
     resultados: List[Dict]
-):
-
-    montagens = []
+) -> List[Dict]:
 
     configs = [
+
         {
-            "nome": "💚 Muito Seguro",
-            "min_prob": 0.82,
-            "num": 5
+            "nome": "🔥 10 Mais Seguros",
+            "min_conf": 75,
+            "min_sel": 10,
+            "max_sel": 10
         },
+
         {
-            "nome": "🟢 Seguro",
-            "min_prob": 0.78,
-            "num": 6
+            "nome": "🛡️ 12 Seguros",
+            "min_conf": 70,
+            "min_sel": 10,
+            "max_sel": 12
         },
+
         {
-            "nome": "🔵 Equilibrado",
-            "min_prob": 0.74,
-            "num": 8
+            "nome": "⚖️ 15 Moderados",
+            "min_conf": 60,
+            "min_sel": 10,
+            "max_sel": 15
         },
+
         {
-            "nome": "🟠 Agressivo",
-            "min_prob": 0.68,
-            "num": 10
+            "nome": "🚀 20 Agressivos",
+            "min_conf": 50,
+            "min_sel": 10,
+            "max_sel": 20
         }
     ]
 
+    montagens = []
+
     for cfg in configs:
 
-        candidatas = []
+        candidatos = []
+
+        # ----------------------------------------------------
+        # UM PALPITE POR JOGO
+        # ----------------------------------------------------
 
         for jogo in resultados:
 
-            combinacoes = gerar_combinacoes_jogo(
-                jogo,
-                cfg["min_prob"]
+            previsoes = jogo.get(
+                "previsoes",
+                []
             )
 
-            if combinacoes:
+            validas = [
+                p for p in previsoes
+                if p.get(
+                    "pontuacao",
+                    0
+                ) >= cfg["min_conf"]
+            ]
 
-                candidatas.append(
-                    combinacoes[0]
-                )
+            if not validas:
+                continue
 
-        candidatas.sort(
-            key=lambda x: x["pontuacao"],
+            melhor = max(
+                validas,
+                key=lambda p:
+                    p.get(
+                        "pontuacao",
+                        0
+                    )
+            )
+
+            candidatos.append({
+
+                "jogo":
+                    f"{jogo['home_team']} vs "
+                    f"{jogo['away_team']}",
+
+                "event_id":
+                    jogo.get(
+                        "event_id"
+                    ),
+
+                "mercado":
+                    melhor["mercado"],
+
+                "selecao":
+                    melhor["selecao"],
+
+                "probabilidade":
+                    melhor["probabilidade"],
+
+                "odd":
+                    melhor.get("odd"),
+
+                "pontuacao":
+                    melhor["pontuacao"],
+
+                "confianca_jogo":
+                    jogo.get(
+                        "confianca_geral",
+                        0
+                    )
+            })
+
+        # ----------------------------------------------------
+        # MÍNIMO DE 10 JOGOS
+        # ----------------------------------------------------
+
+        if len(candidatos) < cfg["min_sel"]:
+            continue
+
+        candidatos.sort(
+            key=lambda x:
+                x["pontuacao"],
             reverse=True
         )
 
-        selecionadas = candidatas[
-            :cfg["num"]
+        selecionadas = candidatos[
+            :cfg["max_sel"]
         ]
 
-        if len(selecionadas) < 2:
-            continue
+        # ----------------------------------------------------
+        # ODDS
+        # ----------------------------------------------------
 
-        confianca = round(
+        odd_total = 1.0
+        tem_odds = True
+
+        for sel in selecionadas:
+
+            if sel.get("odd") is None:
+
+                tem_odds = False
+                break
+
+            try:
+
+                odd_total *= float(
+                    sel["odd"]
+                )
+
+            except:
+
+                tem_odds = False
+                break
+
+        confianca = (
             sum(
-                x["pontuacao"]
-                for x in selecionadas
-            ) / len(selecionadas),
-            1
+                s["pontuacao"]
+                for s in selecionadas
+            )
+            /
+            len(selecionadas)
         )
 
         montagens.append({
-            "nome": cfg["nome"],
-            "selecoes": selecionadas,
-            "num_selecoes": len(
-                selecionadas
-            ),
-            "odd_total": None,
-            "confianca_media": confianca
+
+            "nome":
+                cfg["nome"],
+
+            "selecoes":
+                selecionadas,
+
+            "num_selecoes":
+                len(selecionadas),
+
+            "odd_total":
+                round(
+                    odd_total,
+                    2
+                )
+                if tem_odds
+                else None,
+
+            "confianca_media":
+                round(
+                    confianca,
+                    1
+                )
         })
 
     return montagens
