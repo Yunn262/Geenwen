@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timedelta
 from streamlit_autorefresh import st_autorefresh
 
-from scraper import SportMonksAPI
+from scraper import APIFootballAPI
 from ai_engine import analisar_jogo
 from ticket import gerar_bilhete, gerar_montagens_inteligentes
 import database
@@ -24,7 +24,7 @@ st.set_page_config(
 st_autorefresh(interval=300000, key="auto_refresh")
 
 st.title("⚽ FootballAI Bot")
-st.caption("Dados reais da SportMonks API | Análise com IA simplificada | Bilhetes inteligentes")
+st.caption("Dados reais da API-Football | Análise com IA simplificada | Bilhetes inteligentes")
 
 # ============================================================
 # SIDEBAR
@@ -40,7 +40,7 @@ with st.sidebar:
     )
     st.divider()
     st.info("🔄 Atualização automática a cada 5 min")
-    st.info("ℹ️ Dados via SportMonks API")
+    st.info("ℹ️ Dados via API-Football")
 
 # ============================================================
 # FUNÇÃO DE ANÁLISE COM CACHE
@@ -51,7 +51,7 @@ def analisar_jogos_do_dia(date_str: str):
     Busca jogos do dia e analisa cada um com o motor de IA.
     """
     try:
-        api = SportMonksAPI()
+        api = APIFootballAPI()
         jogos = api.get_scheduled_events(date_str)
         if not jogos:
             return []
@@ -159,21 +159,13 @@ with tab1:
 # ---------- ABA 2: PESQUISA DE JOGO ----------
 with tab2:
     st.subheader("🔎 Pesquisar Jogo")
-    st.caption("Indica as duas equipas e a data para obter as probabilidades calculadas pela IA.")
+    st.caption("Indica as duas equipas e o bot procura nos próximos 7 dias.")
 
     col_search1, col_search2 = st.columns(2)
     with col_search1:
-        equipa_casa = st.text_input("Equipa da Casa", placeholder="Ex: Barcelona", key="equipa_casa")
+        equipa_casa = st.text_input("Equipa da Casa", placeholder="Ex: Nashville", key="equipa_casa")
     with col_search2:
-        equipa_fora = st.text_input("Equipa de Fora", placeholder="Ex: Real Madrid", key="equipa_fora")
-
-    data_pesquisa = st.date_input(
-        "Data do jogo",
-        value=datetime.now().date(),
-        min_value=datetime.now().date() - timedelta(days=7),
-        max_value=datetime.now().date() + timedelta(days=7),
-        key="data_pesquisa"
-    )
+        equipa_fora = st.text_input("Equipa de Fora", placeholder="Ex: Inter Miami", key="equipa_fora")
 
     pesquisar = st.button("Pesquisar Jogo", type="primary", key="btn_pesquisar")
 
@@ -181,55 +173,60 @@ with tab2:
         if not equipa_casa or not equipa_fora:
             st.warning("⚠️ Indica o nome das duas equipas.")
         else:
-            with st.spinner("A pesquisar jogo..."):
-                date_str_pesq = data_pesquisa.strftime("%Y-%m-%d")
-                api = SportMonksAPI()
-                eventos = api.get_scheduled_events(date_str_pesq)
+            with st.spinner("A pesquisar nos próximos 7 dias..."):
+                api = APIFootballAPI()
+                evento_encontrado = None
+                data_encontrada = None
 
-                if not eventos:
-                    st.warning("Nenhum evento encontrado para essa data.")
-                else:
-                    evento_encontrado = None
+                # Procurar nos próximos 7 dias
+                for i in range(7):
+                    data_pesquisa = (datetime.now().date() + timedelta(days=i)).strftime("%Y-%m-%d")
+                    eventos = api.get_scheduled_events(data_pesquisa)
+                    if not eventos:
+                        continue
                     for ev in eventos:
                         home_lower = ev['home_team'].lower()
                         away_lower = ev['away_team'].lower()
                         if equipa_casa.lower() in home_lower and equipa_fora.lower() in away_lower:
                             evento_encontrado = ev
+                            data_encontrada = data_pesquisa
                             break
+                    if evento_encontrado:
+                        break
 
-                    if not evento_encontrado:
-                        st.warning("❌ Jogo não encontrado. Verifica os nomes e a data.")
+                if not evento_encontrado:
+                    st.warning("❌ Jogo não encontrado nos próximos 7 dias. Verifica os nomes ou tenta outra liga.")
+                else:
+                    st.success(f"✅ Jogo encontrado em {data_encontrada}: {evento_encontrado['home_team']} vs {evento_encontrado['away_team']}")
+
+                    dados = api.prepare_match_data(evento_encontrado['event_id'])
+                    if not dados:
+                        st.error("Não foi possível obter dados detalhados do jogo.")
                     else:
-                        st.success(f"✅ Jogo encontrado: {evento_encontrado['home_team']} vs {evento_encontrado['away_team']}")
+                        analise = analisar_jogo(dados)
 
-                        dados = api.prepare_match_data(evento_encontrado['event_id'])
-                        if not dados:
-                            st.error("Não foi possível obter dados detalhados do jogo.")
-                        else:
-                            analise = analisar_jogo(dados)
+                        col_xg1, col_xg2 = st.columns(2)
+                        with col_xg1:
+                            st.metric("xG Casa", f"{analise['xg_casa']:.2f}")
+                        with col_xg2:
+                            st.metric("xG Fora", f"{analise['xg_fora']:.2f}")
 
-                            col_xg1, col_xg2 = st.columns(2)
-                            with col_xg1:
-                                st.metric("xG Casa", f"{analise['xg_casa']:.2f}")
-                            with col_xg2:
-                                st.metric("xG Fora", f"{analise['xg_fora']:.2f}")
+                        st.markdown("---")
+                        st.markdown("### 📊 Probabilidades Calculadas")
 
-                            st.markdown("---")
-                            st.markdown("### 📊 Probabilidades Calculadas")
+                        for p in analise['previsoes']:
+                            prob = min(float(p['probabilidade']), 1.0)
+                            odd_text = f" | Odd: {p['odd']}" if p.get('odd') else ""
+                            st.markdown(f"**{p['mercado']}**: {p['selecao']} → {p['probabilidade']:.0%}{odd_text}")
+                            st.progress(prob)
 
-                            for p in analise['previsoes']:
-                                prob = min(float(p['probabilidade']), 1.0)
-                                odd_text = f" | Odd: {p['odd']}" if p.get('odd') else ""
-                                st.markdown(f"**{p['mercado']}**: {p['selecao']} → {p['probabilidade']:.0%}{odd_text}")
-                                st.progress(prob)
-
-                            melhor = analise['previsoes'][0] if analise['previsoes'] else None
-                            if melhor:
-                                st.success(
-                                    f"💡 **Melhor mercado sugerido:** "
-                                    f"{melhor['mercado']} - {melhor['selecao']} "
-                                    f"({melhor['probabilidade']:.0%}) | Pontuação: {melhor['pontuacao']:.1f}"
-                                )
+                        melhor = analise['previsoes'][0] if analise['previsoes'] else None
+                        if melhor:
+                            st.success(
+                                f"💡 **Melhor mercado sugerido:** "
+                                f"{melhor['mercado']} - {melhor['selecao']} "
+                                f"({melhor['probabilidade']:.0%}) | Pontuação: {melhor['pontuacao']:.1f}"
+                            )
 
 # ---------- ABA 3: BILHETE DO DIA ----------
 with tab3:
