@@ -1,13 +1,31 @@
+"""
+scraper.py
+Recolha de dados da API-Football.
+
+Inclui:
+- Jogos
+- Últimos jogos das equipas
+- Estatísticas
+- Escanteios
+- Cartões
+- Classificação
+- Odds quando disponíveis
+"""
+
 import os
 import requests
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional
+from dotenv import load_dotenv
 
-API_KEY = os.getenv("0ef75e8f44d4ab899653ab4d8753e386", "").strip()
+load_dotenv()
+
+API_KEY = os.getenv("0ef75e8f44d4ab899653ab4d8753e386")
+
 BASE_URL = "https://v3.football.api-sports.io"
 
 HEADERS = {
-    "x-apisports-key": API_KEY,
+    "x-apisports-key": API_KEY or "",
     "Accept": "application/json",
 }
 
@@ -26,14 +44,17 @@ class APIFootballAPI:
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update(HEADERS)
-        self.last_events = []
-        self.cache_stats = {}
-        self.cache_fixtures = {}
 
-    def _get(self, endpoint: str, params: Dict) -> Optional[Dict]:
+        self.last_events = []
+
         if not API_KEY:
-            print("ERRO: API_FOOTBALL_KEY não configurada.")
-            return None
+            print("ATENÇÃO: API_FOOTBALL_KEY não encontrada no .env")
+
+    # ========================================================
+    # REQUEST
+    # ========================================================
+
+    def _get(self, endpoint: str, params: Dict):
 
         try:
             response = self.session.get(
@@ -42,31 +63,39 @@ class APIFootballAPI:
                 timeout=20
             )
 
-            response.raise_for_status()
+            if response.status_code != 200:
+                print(
+                    f"Erro API {response.status_code}: "
+                    f"{response.text[:300]}"
+                )
+                return None
+
             data = response.json()
 
             errors = data.get("errors")
+
             if errors:
-                print(f"API-Football: {errors}")
+                print("Erro API-Football:", errors)
 
             return data
 
         except requests.RequestException as e:
-            print(f"Erro API-Football: {e}")
+            print(f"Erro de conexão com API: {e}")
             return None
 
-    # =========================================================
+    # ========================================================
     # JOGOS DO DIA
-    # =========================================================
+    # ========================================================
 
     def get_scheduled_events(self, date_str: str) -> List[Dict]:
 
-        params = {
-            "date": date_str,
-            "timezone": "Africa/Luanda"
-        }
-
-        data = self._get("/fixtures", params)
+        data = self._get(
+            "/fixtures",
+            {
+                "date": date_str,
+                "timezone": "Africa/Luanda"
+            }
+        )
 
         if not data:
             return []
@@ -84,167 +113,57 @@ class APIFootballAPI:
             if not event_id:
                 continue
 
+            home = teams.get("home", {})
+            away = teams.get("away", {})
+
             events.append({
                 "event_id": event_id,
-                "home_team": _safe_get(
-                    teams, "home", "name", default="?"
-                ),
-                "away_team": _safe_get(
-                    teams, "away", "name", default="?"
-                ),
-                "home_team_id": _safe_get(
-                    teams, "home", "id"
-                ),
-                "away_team_id": _safe_get(
-                    teams, "away", "id"
-                ),
+
+                "home_team": home.get("name", "?"),
+                "away_team": away.get("name", "?"),
+
+                "home_team_id": home.get("id"),
+                "away_team_id": away.get("id"),
+
                 "tournament": league.get("name", ""),
                 "league_id": league.get("id"),
                 "season": league.get("season"),
+
                 "start_time": fixture.get("date", ""),
-                "status": _safe_get(
-                    fixture, "status", "long", default=""
-                ),
+
+                "status": fixture.get(
+                    "status", {}
+                ).get("long", ""),
+
                 "raw": fx
             })
 
         self.last_events = events
+
         return events
 
-    # =========================================================
-    # ESTATÍSTICAS DE UM JOGO
-    # =========================================================
+    # ========================================================
+    # DETALHES
+    # ========================================================
 
-    def get_event_statistics(self, event_id: int) -> Optional[Dict]:
+    def get_event_details(self, event_id):
 
-        if event_id in self.cache_stats:
-            return self.cache_stats[event_id]
+        for event in self.last_events:
 
-        data = self._get(
-            "/fixtures/statistics",
-            {"fixture": event_id}
-        )
+            if str(event["event_id"]) == str(event_id):
+                return event["raw"]
 
-        if not data:
-            return None
+        return None
 
-        self.cache_stats[event_id] = data
-        return data
-
-    # =========================================================
-    # ESCALAÇÕES
-    # =========================================================
-
-    def get_event_lineups(self, event_id: int) -> Optional[Dict]:
-
-        return self._get(
-            "/fixtures/lineups",
-            {"fixture": event_id}
-        )
-
-    # =========================================================
-    # ODDS
-    # =========================================================
-
-    def get_event_odds(self, event_id: int) -> Dict:
-
-        data = self._get(
-            "/odds",
-            {"fixture": event_id}
-        )
-
-        if not data:
-            return {}
-
-        return self._parse_odds(data)
-
-    def _parse_odds(self, data: Dict) -> Dict:
-
-        odds = {}
-
-        try:
-            bookmakers = data.get("response", [])
-
-            if not bookmakers:
-                return odds
-
-            bets = bookmakers[0].get("bookmakers", [])
-
-            if not bets:
-                return odds
-
-            for bookmaker in bets:
-
-                for bet in bookmaker.get("bets", []):
-
-                    name = str(
-                        bet.get("name", "")
-                    ).lower()
-
-                    values = bet.get("values", [])
-
-                    for value in values:
-
-                        label = str(
-                            value.get("value", "")
-                        ).lower()
-
-                        odd = value.get("odd")
-
-                        try:
-                            odd = float(odd)
-                        except:
-                            continue
-
-                        if "match winner" in name:
-
-                            if label in ["home", "1"]:
-                                odds.setdefault(
-                                    "1x2", {}
-                                )["casa"] = odd
-
-                            elif label in ["draw", "x"]:
-                                odds.setdefault(
-                                    "1x2", {}
-                                )["empate"] = odd
-
-                            elif label in ["away", "2"]:
-                                odds.setdefault(
-                                    "1x2", {}
-                                )["fora"] = odd
-
-                        elif "over/under" in name:
-
-                            if "1.5" in label:
-                                odds["over_1_5"] = odd
-
-                            elif "2.5" in label:
-                                odds["over_2_5"] = odd
-
-                        elif "both teams to score" in name:
-
-                            if label == "yes":
-                                odds["btts"] = odd
-
-        except Exception as e:
-            print(f"Erro ao processar odds: {e}")
-
-        return odds
-
-    # =========================================================
-    # FORMA RECENTE
-    # =========================================================
+    # ========================================================
+    # ÚLTIMOS JOGOS
+    # ========================================================
 
     def get_team_recent_matches(
         self,
-        team_id: int,
-        num_matches: int = 10
-    ) -> List[Dict]:
-
-        cache_key = f"{team_id}_{num_matches}"
-
-        if cache_key in self.cache_fixtures:
-            return self.cache_fixtures[cache_key]
+        team_id,
+        num_matches=5
+    ):
 
         data = self._get(
             "/fixtures",
@@ -257,200 +176,261 @@ class APIFootballAPI:
         if not data:
             return []
 
-        result = []
+        resultado = []
 
         for fx in data.get("response", []):
 
-            fixture_id = fx.get(
-                "fixture", {}
-            ).get("id")
-
-            teams = fx.get("teams", {})
             goals = fx.get("goals", {})
 
-            home_id = _safe_get(
-                teams, "home", "id"
-            )
+            home_goals = goals.get("home")
+            away_goals = goals.get("away")
 
-            away_id = _safe_get(
-                teams, "away", "id"
-            )
-
-            hg = goals.get("home")
-            ag = goals.get("away")
-
-            if hg is None or ag is None:
+            if home_goals is None or away_goals is None:
                 continue
 
-            if str(home_id) == str(team_id):
+            teams = fx.get("teams", {})
 
-                gm = int(hg)
-                gs = int(ag)
+            home = teams.get("home", {})
+            away = teams.get("away", {})
+
+            if str(home.get("id")) == str(team_id):
+
+                marcado = int(home_goals)
+                sofrido = int(away_goals)
+
+                adversario = away.get(
+                    "name",
+                    "?"
+                )
+
                 casa = True
-                adversario = _safe_get(
-                    teams, "away", "name", default="?"
-                )
-
-            elif str(away_id) == str(team_id):
-
-                gm = int(ag)
-                gs = int(hg)
-                casa = False
-                adversario = _safe_get(
-                    teams, "home", "name", default="?"
-                )
 
             else:
-                continue
 
-            stats = self.get_fixture_team_stats(
-                fixture_id,
-                team_id
-            )
+                marcado = int(away_goals)
+                sofrido = int(home_goals)
 
-            result.append({
-                "golos_marcados": gm,
-                "golos_sofridos": gs,
+                adversario = home.get(
+                    "name",
+                    "?"
+                )
+
+                casa = False
+
+            resultado.append({
+
+                "golos_marcados": marcado,
+                "golos_sofridos": sofrido,
+
                 "adversario": adversario,
-                "data": _safe_get(
-                    fx, "fixture", "date", default=""
-                ),
+
                 "casa": casa,
-                "escanteios_favor": stats["escanteios_favor"],
-                "escanteios_contra": stats["escanteios_contra"],
-                "cartoes": stats["cartoes"]
+
+                "data": _safe_get(
+                    fx,
+                    "fixture",
+                    "date",
+                    default=""
+                ),
+
+                "fixture_id": _safe_get(
+                    fx,
+                    "fixture",
+                    "id"
+                )
             })
 
-        result = result[:num_matches]
+        return resultado[:num_matches]
 
-        self.cache_fixtures[cache_key] = result
+    # ========================================================
+    # ESTATÍSTICAS DO JOGO
+    # ========================================================
 
-        return result
+    def get_event_statistics(self, event_id):
 
-    # =========================================================
-    # ESTATÍSTICAS DE UMA EQUIPE NUM JOGO
-    # =========================================================
-
-    def get_fixture_team_stats(
-        self,
-        fixture_id: int,
-        team_id: int
-    ) -> Dict:
-
-        stats = {
-            "escanteios_favor": 0.0,
-            "escanteios_contra": 0.0,
-            "cartoes": 0.0
-        }
-
-        data = self.get_event_statistics(fixture_id)
+        data = self._get(
+            "/fixtures/statistics",
+            {
+                "fixture": event_id
+            }
+        )
 
         if not data:
-            return stats
+            return {}
 
-        responses = data.get("response", [])
+        resultado = {}
 
-        minha_equipa = None
-        adversario = None
+        for team_stats in data.get("response", []):
 
-        for item in responses:
+            team = team_stats.get("team", {})
 
-            tid = _safe_get(
-                item, "team", "id"
-            )
+            team_id = team.get("id")
 
-            if str(tid) == str(team_id):
-                minha_equipa = item
-            else:
-                adversario = item
+            if not team_id:
+                continue
 
-        if not minha_equipa:
-            return stats
+            stats = {}
 
-        valores = {}
-
-        for stat in minha_equipa.get(
-            "statistics", []
-        ):
-
-            nome = str(
-                stat.get("type", "")
-            ).lower()
-
-            valor = stat.get("value")
-
-            if isinstance(valor, str):
-                try:
-                    valor = float(
-                        valor.replace("%", "")
-                    )
-                except:
-                    valor = 0
-
-            valores[nome] = valor or 0
-
-        esc_favor = valores.get(
-            "corner kicks",
-            0
-        )
-
-        cartoes = (
-            valores.get("yellow cards", 0)
-            or 0
-        )
-
-        stats["escanteios_favor"] = float(
-            esc_favor or 0
-        )
-
-        stats["cartoes"] = float(
-            cartoes or 0
-        )
-
-        if adversario:
-
-            adv_values = {}
-
-            for stat in adversario.get(
-                "statistics", []
+            for item in team_stats.get(
+                "statistics",
+                []
             ):
 
-                nome = str(
-                    stat.get("type", "")
-                ).lower()
+                nome = item.get("type")
+                valor = item.get("value")
 
-                valor = stat.get("value")
+                stats[nome] = valor
 
-                if isinstance(valor, str):
-                    try:
-                        valor = float(
-                            valor.replace("%", "")
-                        )
-                    except:
-                        valor = 0
+            resultado[team_id] = stats
 
-                adv_values[nome] = valor or 0
+        return resultado
 
-            stats["escanteios_contra"] = float(
-                adv_values.get(
-                    "corner kicks",
-                    0
-                ) or 0
+    # ========================================================
+    # CONVERTER ESTATÍSTICA
+    # ========================================================
+
+    @staticmethod
+    def _number(value, default=0):
+
+        if value is None:
+            return default
+
+        if isinstance(value, int):
+            return value
+
+        if isinstance(value, float):
+            return value
+
+        try:
+
+            text = str(value)
+            text = text.replace("%", "")
+
+            return float(text)
+
+        except Exception:
+            return default
+
+    # ========================================================
+    # MÉDIAS DE ESCANTEIOS E CARTÕES
+    # ========================================================
+
+    def get_team_averages(
+        self,
+        team_id,
+        num_matches=5
+    ):
+
+        jogos = self.get_team_recent_matches(
+            team_id,
+            num_matches
+        )
+
+        if not jogos:
+            return {
+                "cantos": 4.5,
+                "cartoes": 2.0
+            }
+
+        cantos = []
+        cartoes = []
+
+        for jogo in jogos:
+
+            fixture_id = jogo.get(
+                "fixture_id"
             )
 
-        return stats
+            if not fixture_id:
+                continue
 
-    # =========================================================
+            try:
+
+                stats = self.get_event_statistics(
+                    fixture_id
+                )
+
+                team_stats = stats.get(
+                    int(team_id),
+                    {}
+                )
+
+                # ------------------------------
+                # CANTOS
+                # ------------------------------
+
+                corners = team_stats.get(
+                    "Corner Kicks"
+                )
+
+                if corners is not None:
+
+                    valor = self._number(
+                        corners,
+                        0
+                    )
+
+                    cantos.append(valor)
+
+                # ------------------------------
+                # CARTÕES
+                # ------------------------------
+
+                yellow = team_stats.get(
+                    "Yellow Cards"
+                )
+
+                if yellow is not None:
+
+                    valor = self._number(
+                        yellow,
+                        0
+                    )
+
+                    cartoes.append(valor)
+
+            except Exception as e:
+
+                print(
+                    f"Erro estatísticas {team_id}: {e}"
+                )
+
+        media_cantos = (
+            sum(cantos) / len(cantos)
+            if cantos else 4.5
+        )
+
+        media_cartoes = (
+            sum(cartoes) / len(cartoes)
+            if cartoes else 2.0
+        )
+
+        return {
+            "cantos": round(
+                media_cantos,
+                2
+            ),
+
+            "cartoes": round(
+                media_cartoes,
+                2
+            )
+        }
+
+    # ========================================================
     # CLASSIFICAÇÃO
-    # =========================================================
+    # ========================================================
 
     def get_tournament_standings(
         self,
-        league_id: int,
-        season: int
-    ) -> Optional[Dict]:
+        league_id,
+        season
+    ):
 
-        return self._get(
+        if not league_id or not season:
+            return {}
+
+        data = self._get(
             "/standings",
             {
                 "league": league_id,
@@ -458,240 +438,400 @@ class APIFootballAPI:
             }
         )
 
-    def get_team_position(
-        self,
-        league_id: int,
-        season: int,
-        team_id: int
-    ) -> Optional[int]:
-
-        data = self.get_tournament_standings(
-            league_id,
-            season
-        )
-
         if not data:
-            return None
+            return {}
 
         try:
 
-            standings = data["response"][0][
-                "league"
-            ]["standings"][0]
+            standings = (
+                data["response"][0]
+                ["league"]["standings"][0]
+            )
 
-            for team in standings:
+            resultado = {}
 
-                if str(
-                    team["team"]["id"]
-                ) == str(team_id):
+            for item in standings:
 
-                    return int(
-                        team["rank"]
+                team = item.get(
+                    "team",
+                    {}
+                )
+
+                team_id = team.get("id")
+
+                if team_id:
+                    resultado[
+                        team_id
+                    ] = item.get(
+                        "rank"
                     )
 
+            return resultado
+
         except Exception:
-            pass
 
-        return None
+            return {}
 
-    # =========================================================
+    # ========================================================
+    # ODDS
+    # ========================================================
+
+    def get_event_odds(
+        self,
+        event_id
+    ):
+
+        data = self._get(
+            "/odds",
+            {
+                "fixture": event_id
+            }
+        )
+
+        if not data:
+            return {}
+
+        return self._parse_odds(data)
+
+    # ========================================================
+    # INTERPRETAR ODDS
+    # ========================================================
+
+    def _parse_odds(self, data):
+
+        odds = {}
+
+        try:
+
+            response = data.get(
+                "response",
+                []
+            )
+
+            for bookmaker in response:
+
+                for bet in bookmaker.get(
+                    "bookmakers",
+                    []
+                ):
+
+                    pass
+
+            # API-Football pode devolver
+            # formatos diferentes dependendo
+            # da conta/plano.
+
+        except Exception as e:
+
+            print(
+                "Erro ao interpretar odds:",
+                e
+            )
+
+        return odds
+
+    # ========================================================
     # PREPARAR DADOS
-    # =========================================================
+    # ========================================================
 
     def prepare_match_data(
         self,
-        event_id: int
-    ) -> Optional[Dict]:
+        event_id
+    ):
 
         evento = None
 
         for ev in self.last_events:
 
-            if str(ev["event_id"]) == str(event_id):
+            if str(
+                ev["event_id"]
+            ) == str(event_id):
+
                 evento = ev
                 break
 
+        # Caso não esteja no cache,
+        # tenta procurar diretamente.
+
         if not evento:
+
+            data = self._get(
+                "/fixtures",
+                {
+                    "id": event_id
+                }
+            )
+
+            if data and data.get("response"):
+
+                fx = data["response"][0]
+
+                teams = fx.get(
+                    "teams",
+                    {}
+                )
+
+                league = fx.get(
+                    "league",
+                    {}
+                )
+
+                fixture = fx.get(
+                    "fixture",
+                    {}
+                )
+
+                evento = {
+
+                    "event_id":
+                        fixture.get("id"),
+
+                    "home_team":
+                        teams.get(
+                            "home",
+                            {}
+                        ).get(
+                            "name",
+                            "?"
+                        ),
+
+                    "away_team":
+                        teams.get(
+                            "away",
+                            {}
+                        ).get(
+                            "name",
+                            "?"
+                        ),
+
+                    "home_team_id":
+                        teams.get(
+                            "home",
+                            {}
+                        ).get("id"),
+
+                    "away_team_id":
+                        teams.get(
+                            "away",
+                            {}
+                        ).get("id"),
+
+                    "league_id":
+                        league.get("id"),
+
+                    "season":
+                        league.get("season"),
+
+                    "raw": fx
+                }
+
+        if not evento:
+
+            print(
+                f"Evento {event_id} não encontrado."
+            )
+
             return None
 
-        home_id = evento.get("home_team_id")
-        away_id = evento.get("away_team_id")
+        home_id = evento.get(
+            "home_team_id"
+        )
 
-        dados = {
-            "event_id": event_id,
-            "home_team": evento["home_team"],
-            "away_team": evento["away_team"],
-            "data": evento.get("start_time", ""),
-            "liga_id": evento.get("league_id"),
-            "season": evento.get("season"),
+        away_id = evento.get(
+            "away_team_id"
+        )
 
-            "forma_casa": [],
-            "forma_fora": [],
+        # ====================================================
+        # FORMA
+        # ====================================================
 
-            "golos_casa": [],
-            "golos_fora": [],
+        forma_casa = []
 
-            "golos_sofridos_casa": [],
-            "golos_sofridos_fora": [],
+        forma_fora = []
 
-            "cantos_casa": [],
-            "cantos_fora": [],
+        if home_id:
 
-            "cartoes_casa": [],
-            "cartoes_fora": [],
+            try:
 
-            "media_cantos_casa": None,
-            "media_cantos_fora": None,
+                forma_casa = (
+                    self.get_team_recent_matches(
+                        home_id,
+                        5
+                    )
+                )
 
-            "media_cartoes_casa": None,
-            "media_cartoes_fora": None,
+            except Exception as e:
 
-            "posicao_casa": None,
-            "posicao_fora": None,
+                print(
+                    "Erro forma casa:",
+                    e
+                )
+
+        if away_id:
+
+            try:
+
+                forma_fora = (
+                    self.get_team_recent_matches(
+                        away_id,
+                        5
+                    )
+                )
+
+            except Exception as e:
+
+                print(
+                    "Erro forma fora:",
+                    e
+                )
+
+        # ====================================================
+        # GOLOS
+        # ====================================================
+
+        golos_casa = [
+            x["golos_marcados"]
+            for x in forma_casa
+        ]
+
+        golos_fora = [
+            x["golos_marcados"]
+            for x in forma_fora
+        ]
+
+        sofridos_casa = [
+            x["golos_sofridos"]
+            for x in forma_casa
+        ]
+
+        sofridos_fora = [
+            x["golos_sofridos"]
+            for x in forma_fora
+        ]
+
+        # ====================================================
+        # CLASSIFICAÇÃO
+        # ====================================================
+
+        standings = self.get_tournament_standings(
+            evento.get("league_id"),
+            evento.get("season")
+        )
+
+        pos_casa = standings.get(
+            home_id
+        )
+
+        pos_fora = standings.get(
+            away_id
+        )
+
+        # ====================================================
+        # ESCANTEIOS / CARTÕES
+        # ====================================================
+
+        stats_casa = {
+            "cantos": 4.5,
+            "cartoes": 2.0
+        }
+
+        stats_fora = {
+            "cantos": 4.0,
+            "cartoes": 2.0
+        }
+
+        if home_id:
+
+            try:
+
+                stats_casa = (
+                    self.get_team_averages(
+                        home_id,
+                        5
+                    )
+                )
+
+            except Exception:
+                pass
+
+        if away_id:
+
+            try:
+
+                stats_fora = (
+                    self.get_team_averages(
+                        away_id,
+                        5
+                    )
+                )
+
+            except Exception:
+                pass
+
+        # ====================================================
+        # DADOS FINAIS
+        # ====================================================
+
+        return {
+
+            "event_id":
+                event_id,
+
+            "home_team":
+                evento.get(
+                    "home_team",
+                    "?"
+                ),
+
+            "away_team":
+                evento.get(
+                    "away_team",
+                    "?"
+                ),
+
+            "forma_casa":
+                forma_casa,
+
+            "forma_fora":
+                forma_fora,
+
+            "golos_casa":
+                golos_casa,
+
+            "golos_fora":
+                golos_fora,
+
+            "golos_sofridos_casa":
+                sofridos_casa,
+
+            "golos_sofridos_fora":
+                sofridos_fora,
+
+            "posicao_casa":
+                pos_casa,
+
+            "posicao_fora":
+                pos_fora,
+
+            "media_cantos_casa":
+                stats_casa["cantos"],
+
+            "media_cantos_fora":
+                stats_fora["cantos"],
+
+            "media_cartoes_casa":
+                stats_casa["cartoes"],
+
+            "media_cartoes_fora":
+                stats_fora["cartoes"],
 
             "odds": {}
         }
 
-        # -------------------------
-        # CASA
-        # -------------------------
 
-        if home_id:
-
-            jogos = self.get_team_recent_matches(
-                home_id,
-                10
-            )
-
-            dados["forma_casa"] = jogos
-
-            dados["golos_casa"] = [
-                x["golos_marcados"]
-                for x in jogos
-            ]
-
-            dados["golos_sofridos_casa"] = [
-                x["golos_sofridos"]
-                for x in jogos
-            ]
-
-            dados["cantos_casa"] = [
-                x["escanteios_favor"]
-                for x in jogos
-                if x["escanteios_favor"] > 0
-            ]
-
-            dados["cartoes_casa"] = [
-                x["cartoes"]
-                for x in jogos
-                if x["cartoes"] > 0
-            ]
-
-        # -------------------------
-        # FORA
-        # -------------------------
-
-        if away_id:
-
-            jogos = self.get_team_recent_matches(
-                away_id,
-                10
-            )
-
-            dados["forma_fora"] = jogos
-
-            dados["golos_fora"] = [
-                x["golos_marcados"]
-                for x in jogos
-            ]
-
-            dados["golos_sofridos_fora"] = [
-                x["golos_sofridos"]
-                for x in jogos
-            ]
-
-            dados["cantos_fora"] = [
-                x["escanteios_favor"]
-                for x in jogos
-                if x["escanteios_favor"] > 0
-            ]
-
-            dados["cartoes_fora"] = [
-                x["cartoes"]
-                for x in jogos
-                if x["cartoes"] > 0
-            ]
-
-        # -------------------------
-        # MÉDIAS
-        # -------------------------
-
-        if dados["cantos_casa"]:
-            dados["media_cantos_casa"] = sum(
-                dados["cantos_casa"]
-            ) / len(
-                dados["cantos_casa"]
-            )
-
-        if dados["cantos_fora"]:
-            dados["media_cantos_fora"] = sum(
-                dados["cantos_fora"]
-            ) / len(
-                dados["cantos_fora"]
-            )
-
-        if dados["cartoes_casa"]:
-            dados["media_cartoes_casa"] = sum(
-                dados["cartoes_casa"]
-            ) / len(
-                dados["cartoes_casa"]
-            )
-
-        if dados["cartoes_fora"]:
-            dados["media_cartoes_fora"] = sum(
-                dados["cartoes_fora"]
-            ) / len(
-                dados["cartoes_fora"]
-            )
-
-        # -------------------------
-        # CLASSIFICAÇÃO
-        # -------------------------
-
-        league = evento.get("league_id")
-        season = evento.get("season")
-
-        if league and season:
-
-            dados["posicao_casa"] = (
-                self.get_team_position(
-                    league,
-                    season,
-                    home_id
-                )
-            )
-
-            dados["posicao_fora"] = (
-                self.get_team_position(
-                    league,
-                    season,
-                    away_id
-                )
-            )
-
-        # -------------------------
-        # ODDS
-        # -------------------------
-
-        try:
-            dados["odds"] = self.get_event_odds(
-                event_id
-            )
-        except Exception:
-            dados["odds"] = {}
-
-        return dados
-
+# ============================================================
+# TESTE
+# ============================================================
 
 if __name__ == "__main__":
 
@@ -701,10 +841,16 @@ if __name__ == "__main__":
         "%Y-%m-%d"
     )
 
-    jogos = api.get_scheduled_events(hoje)
+    print(
+        f"Buscando jogos de {hoje}..."
+    )
+
+    jogos = api.get_scheduled_events(
+        hoje
+    )
 
     print(
-        f"Encontrados {len(jogos)} jogos."
+        f"Encontrados: {len(jogos)}"
     )
 
     for jogo in jogos[:10]:
