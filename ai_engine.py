@@ -1,27 +1,7 @@
 import math
 from typing import Dict, List
+
 import numpy as np
-
-
-# ============================================================
-# UTILIDADES
-# ============================================================
-
-def media(lista, padrao=0.0):
-    valores = [
-        float(x)
-        for x in lista
-        if x is not None
-    ]
-
-    return (
-        sum(valores) / len(valores)
-        if valores else padrao
-    )
-
-
-def limitar(valor, minimo=0.0, maximo=1.0):
-    return max(minimo, min(maximo, valor))
 
 
 # ============================================================
@@ -34,12 +14,11 @@ def calcular_forma(
 ) -> float:
 
     if not partidas:
-        return 0.5
+        return 1.5
 
     ultimas = partidas[-num_jogos:]
 
     pontos = 0
-    max_pontos = len(ultimas) * 3
 
     for jogo in ultimas:
 
@@ -59,14 +38,11 @@ def calcular_forma(
         elif gm == gs:
             pontos += 1
 
-    if max_pontos == 0:
-        return 0.5
-
-    return pontos / max_pontos
+    return pontos / len(ultimas)
 
 
 # ============================================================
-# GOLOS
+# MÉDIA DE GOLOS
 # ============================================================
 
 def media_golos(
@@ -74,67 +50,50 @@ def media_golos(
     sofridos
 ):
 
+    media_marcados = (
+        sum(marcados) /
+        len(marcados)
+        if marcados
+        else 1.2
+    )
+
+    media_sofridos = (
+        sum(sofridos) /
+        len(sofridos)
+        if sofridos
+        else 1.2
+    )
+
     return (
-        media(marcados, 1.2),
-        media(sofridos, 1.2)
+        media_marcados,
+        media_sofridos
     )
 
 
-def calcular_xg(
-    gm_casa,
-    gs_casa,
-    gm_fora,
-    gs_fora,
-    forma_casa,
-    forma_fora,
-    pos_casa=None,
-    pos_fora=None
+# ============================================================
+# xG
+# ============================================================
+
+def calcular_expectativa_golos(
+    media_marcados_casa,
+    media_sofridos_fora,
+    media_marcados_fora,
+    media_sofridos_casa
 ):
 
-    ataque_casa = (
-        gm_casa * 0.60 +
-        gs_fora * 0.40
-    )
+    xg_casa = (
+        media_marcados_casa +
+        media_sofridos_fora
+    ) / 2
 
-    ataque_fora = (
-        gm_fora * 0.60 +
-        gs_casa * 0.40
-    )
-
-    # Pequeno ajuste de forma
-    ataque_casa *= (
-        0.90 + forma_casa * 0.20
-    )
-
-    ataque_fora *= (
-        0.90 + forma_fora * 0.20
-    )
-
-    # Vantagem de jogar em casa
-    ataque_casa *= 1.05
-
-    # Classificação
-    if pos_casa and pos_fora:
-
-        diferenca = pos_fora - pos_casa
-
-        ajuste = limitar(
-            diferenca * 0.012,
-            -0.10,
-            0.10
-        )
-
-        ataque_casa *= (
-            1 + max(0, ajuste)
-        )
-
-        ataque_fora *= (
-            1 + max(0, -ajuste)
-        )
+    xg_fora = (
+        media_marcados_fora +
+        media_sofridos_casa
+    ) / 2
 
     return (
-        limitar(ataque_casa, 0.25, 4.0),
-        limitar(ataque_fora, 0.20, 3.5)
+        xg_casa,
+        xg_fora
     )
 
 
@@ -142,9 +101,9 @@ def calcular_xg(
 # POISSON
 # ============================================================
 
-def poisson_lista(
-    esperado,
-    max_golos=10
+def prob_poisson(
+    golos_esperados,
+    max_golos=8
 ):
 
     resultado = []
@@ -152,8 +111,10 @@ def poisson_lista(
     for k in range(max_golos + 1):
 
         p = (
-            math.exp(-esperado) *
-            esperado ** k /
+            math.exp(-golos_esperados)
+            *
+            golos_esperados ** k
+            /
             math.factorial(k)
         )
 
@@ -162,67 +123,32 @@ def poisson_lista(
     return resultado
 
 
-def prob_over(
-    xg_casa,
-    xg_fora,
-    linha
-):
+# ============================================================
+# RESULTADO FINAL
+# ============================================================
 
-    pc = poisson_lista(xg_casa)
-    pf = poisson_lista(xg_fora)
-
-    prob = 0
-
-    for i, p1 in enumerate(pc):
-
-        for j, p2 in enumerate(pf):
-
-            if i + j > linha:
-
-                prob += p1 * p2
-
-    return limitar(prob)
-
-
-def prob_btts(
+def avaliar_resultado_final(
     xg_casa,
     xg_fora
 ):
-
-    p_casa = 1 - poisson_lista(
-        xg_casa
-    )[0]
-
-    p_fora = 1 - poisson_lista(
-        xg_fora
-    )[0]
-
-    return limitar(
-        p_casa * p_fora
-    )
-
-
-# ============================================================
-# RESULTADO
-# ============================================================
-
-def avaliar_resultado(
-    xg_casa,
-    xg_fora
-):
-
-    pc = poisson_lista(xg_casa)
-    pf = poisson_lista(xg_fora)
 
     casa = 0
     empate = 0
     fora = 0
 
-    for i, p1 in enumerate(pc):
+    pc = prob_poisson(
+        xg_casa
+    )
 
-        for j, p2 in enumerate(pf):
+    pf = prob_poisson(
+        xg_fora
+    )
 
-            p = p1 * p2
+    for i in range(9):
+
+        for j in range(9):
+
+            p = pc[i] * pf[j]
 
             if i > j:
                 casa += p
@@ -236,53 +162,137 @@ def avaliar_resultado(
     total = casa + empate + fora
 
     return {
-        "casa": casa / total,
-        "empate": empate / total,
-        "fora": fora / total
+
+        "casa":
+            round(casa / total, 3),
+
+        "empate":
+            round(empate / total, 3),
+
+        "fora":
+            round(fora / total, 3)
     }
 
 
 # ============================================================
-# ESCANTEIOS
+# OVER
 # ============================================================
 
-def prob_over_estatistica(
-    media_total,
+def avaliar_over_under(
+    xg_casa,
+    xg_fora,
+    linha
+):
+
+    pc = prob_poisson(
+        xg_casa
+    )
+
+    pf = prob_poisson(
+        xg_fora
+    )
+
+    prob = 0
+
+    for i in range(9):
+
+        for j in range(9):
+
+            if i + j > linha:
+
+                prob += (
+                    pc[i] * pf[j]
+                )
+
+    return round(
+        min(max(prob, 0), 1),
+        3
+    )
+
+
+# ============================================================
+# BTTS
+# ============================================================
+
+def avaliar_btts(
+    xg_casa,
+    xg_fora
+):
+
+    pc = prob_poisson(
+        xg_casa
+    )
+
+    pf = prob_poisson(
+        xg_fora
+    )
+
+    prob = (
+        (1 - pc[0])
+        *
+        (1 - pf[0])
+    )
+
+    return round(
+        prob,
+        3
+    )
+
+
+# ============================================================
+# DISTRIBUIÇÃO NORMAL
+# ============================================================
+
+def prob_over_normal(
+    media,
     linha,
     desvio
 ):
 
-    if media_total <= 0:
-        return 0.0
+    if media <= 0:
+        return 0
 
     z = (
-        linha - media_total
+        linha - media
     ) / desvio
 
-    return limitar(
-        1 - 0.5 * (
-            1 + math.erf(
+    return (
+        1 -
+        0.5 *
+        (
+            1 +
+            math.erf(
                 z / math.sqrt(2)
             )
         )
     )
 
 
-def calcular_prob_cantos(
-    cantos_casa,
-    cantos_fora,
+# ============================================================
+# ESCANTEIOS
+# ============================================================
+
+def avaliar_cantos(
+    casa,
+    fora,
     linha
 ):
 
-    esperado = (
-        media(cantos_casa, 4.5) +
-        media(cantos_fora, 4.0)
-    )
+    media = casa + fora
 
-    return prob_over_estatistica(
-        esperado,
-        linha,
-        2.8
+    return round(
+        min(
+            max(
+                prob_over_normal(
+                    media,
+                    linha,
+                    3.0
+                ),
+                0
+            ),
+            1
+        ),
+        3
     )
 
 
@@ -290,63 +300,37 @@ def calcular_prob_cantos(
 # CARTÕES
 # ============================================================
 
-def calcular_prob_cartoes(
-    cartoes_casa,
-    cartoes_fora,
+def avaliar_cartoes(
+    casa,
+    fora,
     linha
 ):
 
-    esperado = (
-        media(cartoes_casa, 2.0) +
-        media(cartoes_fora, 2.0)
-    )
-
-    return prob_over_estatistica(
-        esperado,
-        linha,
-        1.7
-    )
-
-
-# ============================================================
-# PONTUAÇÃO
-# ============================================================
-
-def calcular_pontuacao(
-    probabilidade,
-    odd=None
-):
-
-    probabilidade = limitar(
-        probabilidade
-    )
-
-    # Sem odd:
-    # a probabilidade é o fator principal
-    base = probabilidade * 100
-
-    if odd and odd > 1:
-
-        valor = (
-            probabilidade * odd
-        ) - 1
-
-        # Pequeno bônus/malus de valor
-        base += valor * 10
+    media = casa + fora
 
     return round(
-        limitar(base, 0, 99),
-        1
+        min(
+            max(
+                prob_over_normal(
+                    media,
+                    linha,
+                    1.8
+                ),
+                0
+            ),
+            1
+        ),
+        3
     )
 
 
 # ============================================================
-# ANÁLISE PRINCIPAL
+# ANÁLISE
 # ============================================================
 
 def analisar_jogo(
     dados_jogo: Dict
-) -> Dict:
+):
 
     home = dados_jogo.get(
         "home_team",
@@ -358,9 +342,9 @@ def analisar_jogo(
         "?"
     )
 
-    # -------------------------
+    # --------------------------------------------------------
     # FORMA
-    # -------------------------
+    # --------------------------------------------------------
 
     forma_casa = calcular_forma(
         dados_jogo.get(
@@ -376,11 +360,11 @@ def analisar_jogo(
         )
     )
 
-    # -------------------------
+    # --------------------------------------------------------
     # GOLOS
-    # -------------------------
+    # --------------------------------------------------------
 
-    gm_casa, gs_casa = media_golos(
+    media_casa, sofridos_casa = media_golos(
         dados_jogo.get(
             "golos_casa",
             []
@@ -391,7 +375,7 @@ def analisar_jogo(
         )
     )
 
-    gm_fora, gs_fora = media_golos(
+    media_fora, sofridos_fora = media_golos(
         dados_jogo.get(
             "golos_fora",
             []
@@ -402,143 +386,246 @@ def analisar_jogo(
         )
     )
 
-    xg_casa, xg_fora = calcular_xg(
-        gm_casa,
-        gs_casa,
-        gm_fora,
-        gs_fora,
-        forma_casa,
-        forma_fora,
-        dados_jogo.get(
-            "posicao_casa"
+    # --------------------------------------------------------
+    # CLASSIFICAÇÃO
+    # --------------------------------------------------------
+
+    try:
+
+        pos_casa = int(
+            dados_jogo.get(
+                "posicao_casa"
+            )
+            or 10
+        )
+
+    except:
+
+        pos_casa = 10
+
+    try:
+
+        pos_fora = int(
+            dados_jogo.get(
+                "posicao_fora"
+            )
+            or 10
+        )
+
+    except:
+
+        pos_fora = 10
+
+    ajuste = (
+        pos_fora - pos_casa
+    ) * 0.04
+
+    # --------------------------------------------------------
+    # xG
+    # --------------------------------------------------------
+
+    xg_casa, xg_fora = calcular_expectativa_golos(
+
+        media_casa +
+        max(
+            0,
+            ajuste
         ),
-        dados_jogo.get(
-            "posicao_fora"
+
+        sofridos_fora,
+
+        media_fora +
+        max(
+            0,
+            -ajuste
+        ),
+
+        sofridos_casa
+    )
+
+    # Forma influencia moderadamente
+
+    xg_casa *= (
+        0.90 +
+        forma_casa * 0.06
+    )
+
+    xg_fora *= (
+        0.90 +
+        forma_fora * 0.06
+    )
+
+    xg_casa = max(
+        0.25,
+        min(
+            4.5,
+            xg_casa
         )
     )
 
-    # -------------------------
-    # PROBABILIDADES
-    # -------------------------
+    xg_fora = max(
+        0.25,
+        min(
+            4.5,
+            xg_fora
+        )
+    )
 
-    resultado = avaliar_resultado(
+    # --------------------------------------------------------
+    # PROBABILIDADES
+    # --------------------------------------------------------
+
+    resultado = avaliar_resultado_final(
         xg_casa,
         xg_fora
     )
 
-    over15 = prob_over(
+    over15 = avaliar_over_under(
         xg_casa,
         xg_fora,
         1.5
     )
 
-    over25 = prob_over(
+    over25 = avaliar_over_under(
         xg_casa,
         xg_fora,
         2.5
     )
 
-    btts = prob_btts(
+    over35 = avaliar_over_under(
+        xg_casa,
+        xg_fora,
+        3.5
+    )
+
+    btts = avaliar_btts(
         xg_casa,
         xg_fora
     )
 
-    # -------------------------
-    # ESCANTEIOS
-    # -------------------------
+    # --------------------------------------------------------
+    # CANTOS
+    # --------------------------------------------------------
 
     cantos_casa = dados_jogo.get(
-        "cantos_casa",
-        []
+        "media_cantos_casa",
+        4.5
     )
 
     cantos_fora = dados_jogo.get(
-        "cantos_fora",
-        []
+        "media_cantos_fora",
+        4.0
     )
 
-    over75_cantos = calcular_prob_cantos(
+    over7_cantos = avaliar_cantos(
         cantos_casa,
         cantos_fora,
-        7.5
+        7
     )
 
-    over85_cantos = calcular_prob_cantos(
+    over8_cantos = avaliar_cantos(
+        cantos_casa,
+        cantos_fora,
+        8
+    )
+
+    over85_cantos = avaliar_cantos(
         cantos_casa,
         cantos_fora,
         8.5
     )
 
-    # -------------------------
+    # --------------------------------------------------------
     # CARTÕES
-    # -------------------------
+    # --------------------------------------------------------
 
     cartoes_casa = dados_jogo.get(
-        "cartoes_casa",
-        []
+        "media_cartoes_casa",
+        2
     )
 
     cartoes_fora = dados_jogo.get(
-        "cartoes_fora",
-        []
+        "media_cartoes_fora",
+        2
     )
 
-    over25_cartoes = calcular_prob_cartoes(
+    over2_cartoes = avaliar_cartoes(
         cartoes_casa,
         cartoes_fora,
-        2.5
+        2
     )
 
-    over35_cartoes = calcular_prob_cartoes(
+    over3_cartoes = avaliar_cartoes(
         cartoes_casa,
         cartoes_fora,
-        3.5
+        3
     )
 
-    odds = dados_jogo.get(
-        "odds",
-        {}
+    over4_cartoes = avaliar_cartoes(
+        cartoes_casa,
+        cartoes_fora,
+        4
     )
 
     previsoes = []
 
-    def add(
+    # --------------------------------------------------------
+    # ADICIONAR PREVISÃO
+    # --------------------------------------------------------
+
+    def adicionar(
         mercado,
         selecao,
-        prob,
-        odd=None
+        probabilidade
     ):
 
-        previsoes.append({
-            "mercado": mercado,
-            "selecao": selecao,
-            "probabilidade": round(
-                prob,
-                3
-            ),
-            "odd": odd,
-            "pontuacao": calcular_pontuacao(
-                prob,
-                odd
+        probabilidade = float(
+            max(
+                0,
+                min(
+                    1,
+                    probabilidade
+                )
             )
+        )
+
+        # Pontuação baseada principalmente
+        # na probabilidade calculada.
+        pontuacao = (
+            probabilidade * 100
+        )
+
+        previsoes.append({
+
+            "mercado":
+                mercado,
+
+            "selecao":
+                selecao,
+
+            "probabilidade":
+                round(
+                    probabilidade,
+                    3
+                ),
+
+            "odd":
+                None,
+
+            "pontuacao":
+                round(
+                    pontuacao,
+                    1
+                )
         })
 
-    # -------------------------
+    # --------------------------------------------------------
     # RESULTADO
-    # -------------------------
+    # --------------------------------------------------------
 
     melhor = max(
         resultado,
         key=resultado.get
-    )
-
-    odd = (
-        odds.get(
-            "1x2",
-            {}
-        ).get(
-            melhor
-        )
     )
 
     nomes = {
@@ -547,16 +634,15 @@ def analisar_jogo(
         "fora": "Fora"
     }
 
-    add(
+    adicionar(
         "Resultado Final",
         nomes[melhor],
-        resultado[melhor],
-        odd
+        resultado[melhor]
     )
 
-    # -------------------------
+    # --------------------------------------------------------
     # DUPLA HIPÓTESE
-    # -------------------------
+    # --------------------------------------------------------
 
     casa_empate = (
         resultado["casa"] +
@@ -570,7 +656,7 @@ def analisar_jogo(
 
     if casa_empate >= fora_empate:
 
-        add(
+        adicionar(
             "Dupla Hipótese",
             "Casa ou Empate",
             casa_empate
@@ -578,108 +664,142 @@ def analisar_jogo(
 
     else:
 
-        add(
+        adicionar(
             "Dupla Hipótese",
             "Fora ou Empate",
             fora_empate
         )
 
-    # -------------------------
+    # --------------------------------------------------------
     # GOLOS
-    # -------------------------
+    # --------------------------------------------------------
 
-    add(
-        "Over 1.5 Gols",
+    adicionar(
+        "Over 1.5",
         "Sim",
-        over15,
-        odds.get("over_1_5")
+        over15
     )
 
-    add(
-        "Over 2.5 Gols",
+    adicionar(
+        "Over 2.5",
         "Sim",
-        over25,
-        odds.get("over_2_5")
+        over25
     )
 
-    add(
+    adicionar(
+        "Over 3.5",
+        "Sim",
+        over35
+    )
+
+    adicionar(
         "BTTS",
         "Sim",
-        btts,
-        odds.get("btts")
+        btts
     )
 
-    # -------------------------
-    # ESCANTEIOS
-    # -------------------------
+    # --------------------------------------------------------
+    # CANTOS
+    # --------------------------------------------------------
 
-    add(
-        "Over 7.5 Escanteios",
+    adicionar(
+        "Over 7 Cantos",
         "Sim",
-        over75_cantos
+        over7_cantos
     )
 
-    add(
-        "Over 8.5 Escanteios",
+    adicionar(
+        "Over 8 Cantos",
+        "Sim",
+        over8_cantos
+    )
+
+    adicionar(
+        "Over 8.5 Cantos",
         "Sim",
         over85_cantos
     )
 
-    # -------------------------
+    # --------------------------------------------------------
     # CARTÕES
-    # -------------------------
+    # --------------------------------------------------------
 
-    add(
-        "Over 2.5 Cartões",
+    adicionar(
+        "Over 2 Cartões",
         "Sim",
-        over25_cartoes
+        over2_cartoes
     )
 
-    add(
-        "Over 3.5 Cartões",
+    adicionar(
+        "Over 3 Cartões",
         "Sim",
-        over35_cartoes
+        over3_cartoes
     )
 
-    # -------------------------
+    adicionar(
+        "Over 4 Cartões",
+        "Sim",
+        over4_cartoes
+    )
+
+    # --------------------------------------------------------
     # ORDENAR
-    # -------------------------
+    # --------------------------------------------------------
 
     previsoes.sort(
         key=lambda x: x["pontuacao"],
         reverse=True
     )
 
-    confianca = round(
-        np.mean([
-            x["pontuacao"]
-            for x in previsoes[:3]
-        ]),
-        1
+    confianca = int(
+        np.mean(
+            [
+                p["pontuacao"]
+                for p in previsoes[:3]
+            ]
+        )
     )
 
     return {
-        "event_id": dados_jogo.get(
-            "event_id"
-        ),
-        "home_team": home,
-        "away_team": away,
-        "xg_casa": round(
-            xg_casa,
-            2
-        ),
-        "xg_fora": round(
-            xg_fora,
-            2
-        ),
-        "forma_casa": round(
-            forma_casa * 100,
-            1
-        ),
-        "forma_fora": round(
-            forma_fora * 100,
-            1
-        ),
-        "previsoes": previsoes,
-        "confianca_geral": confianca
+
+        "event_id":
+            dados_jogo.get(
+                "event_id"
+            ),
+
+        "home_team":
+            home,
+
+        "away_team":
+            away,
+
+        "xg_casa":
+            round(
+                xg_casa,
+                2
+            ),
+
+        "xg_fora":
+            round(
+                xg_fora,
+                2
+            ),
+
+        "previsoes":
+            previsoes,
+
+        "confianca_geral":
+            confianca,
+
+        "media_cantos_casa":
+            cantos_casa,
+
+        "media_cantos_fora":
+            cantos_fora,
+
+        "media_cartoes_casa":
+            cartoes_casa,
+
+        "media_cartoes_fora":
+            cartoes_fora
     }
