@@ -57,7 +57,6 @@ class SportMonksAPI:
     def get_scheduled_events(self, date_str: str) -> List[Dict]:
         """
         Obtém jogos de uma data (formato 'YYYY-MM-DD').
-        A data deve ser passada como filtro.
         """
         params = {
             "filters": f"fixtureDate:{date_str}",
@@ -138,7 +137,6 @@ class SportMonksAPI:
             scores = fx.get("scores", [])
             if not scores:
                 continue
-            # Último score (final)
             final_score = scores[-1] if scores else {}
             home_goals = _safe_get(final_score, "score", "home", default=0) or 0
             away_goals = _safe_get(final_score, "score", "away", default=0) or 0
@@ -159,7 +157,6 @@ class SportMonksAPI:
                 "data": fx.get("starting_at", "")
             })
 
-        # Ordenar por data decrescente
         played.sort(key=lambda x: x["data"], reverse=True)
         return played[:num_matches]
 
@@ -197,7 +194,6 @@ class SportMonksAPI:
 
         home_id = evento.get("home_team_id")
         away_id = evento.get("away_team_id")
-        league_id = evento.get("league_id")
 
         if home_id:
             try:
@@ -216,12 +212,6 @@ class SportMonksAPI:
                 match_data["golos_sofridos_fora"] = [j["golos_sofridos"] for j in ultimos_fora]
             except Exception as e:
                 print(f"Erro forma fora: {e}")
-
-        # Classificação (precisa do season_id, não league_id)
-        # Pode ser adicionado depois se necessário
-        # if league_id:
-        #     standings = self.get_tournament_standings(league_id)
-        #     ...
 
         return match_data
 
